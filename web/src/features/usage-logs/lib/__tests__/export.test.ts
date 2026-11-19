@@ -107,12 +107,36 @@ describe('usage log CSV export', () => {
       '16',
       '1906',
       '15',
+      '94.9%',
       '$0.5',
       '3s',
       '203.0.113.9',
       'req-1',
       '',
     ])
+  })
+
+  test('exports Anthropic cache hit rate using uncached + read + write denominator', async () => {
+    const t = await chineseTranslator()
+    const header = getLogCsvHeader(false, t)
+
+    const row = getLogCsvRow(
+      {
+        ...consumeLog,
+        model_name: 'claude-sonnet-4-6',
+        prompt_tokens: 50,
+        other: JSON.stringify({
+          usage_semantic: 'anthropic',
+          claude: true,
+          cache_tokens: 5000,
+          cache_write_tokens: 5000,
+        }),
+      },
+      false,
+      t
+    )
+
+    expect(row[header.indexOf('Cache Hit Rate')]).toBe('49.8%')
   })
 
   test('cache write cell counts OpenAI 12-hour writes once as part of the total', async () => {
@@ -153,7 +177,7 @@ describe('usage log CSV export', () => {
     const row = getLogCsvRow(topup, false, t)
 
     expect(row.slice(1, 2)).toEqual(['充值'])
-    expect(row.slice(5, 12)).toEqual(['', '', '', '', '', '', ''])
+    expect(row.slice(5, 13)).toEqual(['', '', '', '', '', '', '', ''])
     expect(row.at(-1)).toBe('充值 $5')
   })
 

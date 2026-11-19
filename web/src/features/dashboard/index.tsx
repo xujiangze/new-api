@@ -32,11 +32,11 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { ROLE } from '@/lib/roles'
-import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { ModelsChartPreferences } from './components/models/models-chart-preferences'
 import { ModelsFilter } from './components/models/models-filter-dialog'
+import { ModelsQuickFilterBar } from './components/models/models-quick-filter-bar'
 import { OverviewDashboard } from './components/overview/overview-dashboard'
 import { DEFAULT_TIME_GRANULARITY } from './constants'
 import {
@@ -64,9 +64,10 @@ const LOG_STAT_CARD_FALLBACK_KEYS = [
   'count',
   'quota',
   'tokens',
+  'average-rpm',
   'cache-read',
   'cache-creation',
-  'average-rpm',
+  'cache-hit-rate',
   'average-tpm',
 ] as const
 const PERFORMANCE_METRIC_FALLBACK_KEYS = [
@@ -82,6 +83,12 @@ const PERFORMANCE_MODEL_FALLBACK_KEYS = [
 const LazyLogStatCards = lazy(() =>
   import('./components/models/log-stat-cards').then((m) => ({
     default: m.LogStatCards,
+  }))
+)
+
+const LazyCacheHitRateChart = lazy(() =>
+  import('./components/models/cache-hit-rate-chart').then((m) => ({
+    default: m.CacheHitRateChart,
   }))
 )
 
@@ -118,15 +125,11 @@ const LazyFlowCharts = lazy(() =>
 function LogStatCardsFallback() {
   return (
     <div className='overflow-hidden rounded-lg border'>
-      <div className='divide-border/60 grid min-w-0 grid-cols-2 divide-x sm:grid-cols-3 lg:grid-cols-7'>
-        {LOG_STAT_CARD_FALLBACK_KEYS.map((key, index) => (
+      <div className='bg-border/60 grid min-w-0 grid-cols-2 gap-px sm:grid-cols-4 lg:grid-cols-4'>
+        {LOG_STAT_CARD_FALLBACK_KEYS.map((key) => (
           <div
             key={key}
-            className={cn(
-              'min-w-0 px-2.5 py-1.5 sm:px-3 sm:py-4 xl:px-4',
-              index === LOG_STAT_CARD_FALLBACK_KEYS.length - 1 &&
-                'col-span-2 sm:col-span-1'
-            )}
+            className='bg-background min-w-0 px-2.5 py-2 sm:px-3 sm:py-4 xl:px-4'
           >
             <div className='flex items-center gap-1.5 sm:gap-2'>
               <Skeleton className='size-4 rounded-sm sm:size-7 sm:rounded-md' />
@@ -136,9 +139,6 @@ function LogStatCardsFallback() {
             <Skeleton className='mt-1 hidden h-3.5 w-28 md:block' />
           </div>
         ))}
-      </div>
-      <div className='border-t px-3 py-2'>
-        <Skeleton className='h-4 w-full max-w-md' />
       </div>
     </div>
   )
@@ -205,6 +205,7 @@ export function Dashboard() {
     DASHBOARD_DEFAULT_SECTION) as DashboardSectionId
 
   const [modelData, setModelData] = useState<QuotaDataItem[]>([])
+  const [selectedModels, setSelectedModels] = useState<string[]>([])
   const [dataLoading, setDataLoading] = useState(false)
   const [chartPreferences, setChartPreferences] =
     useState<DashboardChartPreferences>(() => getSavedChartPreferences())
@@ -229,7 +230,30 @@ export function Dashboard() {
 
   const handleResetFilters = useCallback(() => {
     setModelFilters(buildDefaultDashboardFilters(chartPreferences))
+    setSelectedModels([])
   }, [chartPreferences])
+
+  const handleUsernameSubmit = useCallback((username: string) => {
+    setModelFilters((prev) => ({
+      ...prev,
+      username: username || undefined,
+    }))
+  }, [])
+
+  const handleClearQuickFilters = useCallback(() => {
+    setSelectedModels([])
+    setModelFilters((prev) =>
+      prev.username ? { ...prev, username: undefined } : prev
+    )
+  }, [])
+
+  const filteredModelData = useMemo(() => {
+    if (selectedModels.length === 0) return modelData
+    const selectedSet = new Set(selectedModels)
+    return modelData.filter((item) =>
+      selectedSet.has(item.model_name || 'Unknown')
+    )
+  }, [modelData, selectedModels])
 
   const handleDataUpdate = useCallback(
     (data: QuotaDataItem[], loading: boolean) => {
@@ -353,10 +377,20 @@ export function Dashboard() {
           </div>
           {activeSection === 'models' && (
             <>
+              <ModelsQuickFilterBar
+                rawData={modelData}
+                selectedModels={selectedModels}
+                onSelectedModelsChange={setSelectedModels}
+                isAdmin={isAdmin}
+                username={modelFilters.username ?? ''}
+                onUsernameSubmit={handleUsernameSubmit}
+                onClearQuickFilters={handleClearQuickFilters}
+              />
               <FadeIn>
                 <Suspense fallback={<LogStatCardsFallback />}>
                   <LazyLogStatCards
                     filters={modelFilters}
+                    selectedModels={selectedModels}
                     onDataUpdate={handleDataUpdate}
                   />
                 </Suspense>
@@ -368,10 +402,21 @@ export function Dashboard() {
                   </Suspense>
                 </FadeIn>
               )}
-              <FadeIn delay={0.1}>
+              <FadeIn delay={0.08}>
+                <Suspense fallback={<ModelChartsFallback />}>
+                  <LazyCacheHitRateChart
+                    data={filteredModelData}
+                    loading={dataLoading}
+                    timeGranularity={
+                      modelFilters.time_granularity || DEFAULT_TIME_GRANULARITY
+                    }
+                  />
+                </Suspense>
+              </FadeIn>
+              <FadeIn delay={0.12}>
                 <Suspense fallback={<ModelChartsFallback />}>
                   <LazyConsumptionDistributionChart
-                    data={modelData}
+                    data={filteredModelData}
                     loading={dataLoading}
                     defaultChartType={
                       chartPreferences.consumptionDistributionChart
@@ -382,10 +427,10 @@ export function Dashboard() {
                   />
                 </Suspense>
               </FadeIn>
-              <FadeIn delay={0.15}>
+              <FadeIn delay={0.16}>
                 <Suspense fallback={<ModelChartsFallback />}>
                   <LazyModelCharts
-                    data={modelData}
+                    data={filteredModelData}
                     loading={dataLoading}
                     defaultChartTab={chartPreferences.modelAnalyticsChart}
                     timeGranularity={

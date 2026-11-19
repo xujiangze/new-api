@@ -61,6 +61,11 @@ export const MODEL_ANALYTICS_CHART_OPTIONS = [
   { value: 'top', labelKey: 'Call Count Ranking' },
 ] as const
 
+export const CACHE_HIT_RATE_CHART_OPTIONS = [
+  { value: 'trend', labelKey: 'Hit Rate Trend' },
+  { value: 'comparison', labelKey: 'Model Comparison' },
+] as const
+
 export const EMPTY_DASHBOARD_FILTERS: DashboardFilters = {
   start_timestamp: undefined,
   end_timestamp: undefined,

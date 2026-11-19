@@ -31,6 +31,14 @@ export {
   isViolationFeeLog,
 } from './format'
 
+// Cache hit rate utilities
+export {
+  getUsageLogCacheMetrics,
+  formatCacheHitRate,
+  formatCacheHitRateCsv,
+  type UsageLogCacheMetrics,
+} from './cache-hit-rate'
+
 // Response model diagnostics
 export { isResponseModelMismatch } from './response-model'
 

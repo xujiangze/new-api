@@ -27,11 +27,20 @@ import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import { toIntlLocale } from '@/i18n/languages'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import dayjs from '@/lib/dayjs'
-import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatNumber,
+  formatTimestampToDate,
+} from '@/lib/format'
 
 import type { UsageLog } from '../data/schema'
+import {
+  formatCacheHitRate,
+  getUsageLogCacheMetrics,
+} from '../lib/cache-hit-rate'
 import { formatModelName, logTokenName, parseLogOther } from '../lib/format'
 import {
   getLogTypeConfig,
@@ -62,7 +71,8 @@ export function CommonLogMobileCard<TData>(props: {
   log: UsageLog
   cells: Map<string, Cell<TData, unknown>>
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const context = useUsageLogsContext()
   const [selectedField, setSelectedField] = useState<FieldName | null>(null)
   const log = props.log
@@ -127,12 +137,13 @@ export function CommonLogMobileCard<TData>(props: {
   const costCell = props.cells.get('quota')
   const contentCell = props.cells.get('content')
   const channelCell = props.cells.get('channel')
-  const cacheRead = other?.cache_tokens || 0
-  const cacheWrite =
-    (other?.cache_creation_tokens_5m || 0) +
-      (other?.cache_creation_tokens_1h || 0) ||
-    other?.cache_creation_tokens ||
-    0
+  const cacheMetrics = getUsageLogCacheMetrics(log, other)
+  const cacheRead = cacheMetrics.cacheReadTokens
+  const cacheWrite = cacheMetrics.cacheWriteTokens
+  const showHitRate =
+    displayable &&
+    props.cells.has('cache_hit_rate') &&
+    cacheMetrics.hitRate !== null
   const showTokens =
     displayable &&
     props.cells.has('prompt_tokens') &&
@@ -288,28 +299,46 @@ export function CommonLogMobileCard<TData>(props: {
             )}
         </div>
       )}
-      {showTokens && (
+      {(showTokens || showHitRate) && (
         <div className='text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs [overflow-wrap:anywhere]'>
-          <span>
-            {t('Input')}{' '}
-            <span className='text-foreground tabular-nums'>
-              {log.prompt_tokens.toLocaleString()}
-            </span>
-          </span>
-          <span>
-            {t('Output')}{' '}
-            <span className='text-foreground tabular-nums'>
-              {log.completion_tokens.toLocaleString()}
-            </span>
-          </span>
-          {cacheRead > 0 && (
-            <span>
-              {t('Cache')} ↓ {cacheRead.toLocaleString()}
-            </span>
+          {showTokens && (
+            <>
+              <span>
+                {t('Input')}{' '}
+                <span className='text-foreground tabular-nums'>
+                  {formatNumber(log.prompt_tokens, locale)}
+                </span>
+              </span>
+              <span>
+                {t('Output')}{' '}
+                <span className='text-foreground tabular-nums'>
+                  {formatNumber(log.completion_tokens, locale)}
+                </span>
+              </span>
+              {cacheRead > 0 && (
+                <span>
+                  {t('Cache')} ↓ {formatNumber(cacheRead, locale)}
+                </span>
+              )}
+              {cacheWrite > 0 && (
+                <span>
+                  {t('Cache')} ↑ {formatNumber(cacheWrite, locale)}
+                </span>
+              )}
+            </>
           )}
-          {cacheWrite > 0 && (
+          {showHitRate && (
             <span>
-              {t('Cache')} ↑ {cacheWrite.toLocaleString()}
+              {t('Cache Hit Rate')}{' '}
+              <span
+                className={
+                  cacheMetrics.hitRate && cacheMetrics.hitRate > 0
+                    ? 'font-mono font-medium text-emerald-600 tabular-nums dark:text-emerald-400'
+                    : 'text-foreground font-mono tabular-nums'
+                }
+              >
+                {formatCacheHitRate(cacheMetrics.hitRate, locale)}
+              </span>
             </span>
           )}
         </div>

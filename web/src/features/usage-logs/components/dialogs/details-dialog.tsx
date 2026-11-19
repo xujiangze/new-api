@@ -68,13 +68,23 @@ import {
 import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
 import { PolicyDecisionRecord } from '@/features/system-settings/request-policies/decision-record'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { toIntlLocale } from '@/i18n/languages'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatNumber,
+  formatTokens,
+  formatUseTime,
+} from '@/lib/format'
 import { translateServerText } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
 import { AuditDetailFields } from '../../audit/components/audit-detail-fields'
 import type { UsageLog } from '../../data/schema'
+import {
+  formatCacheHitRate,
+  getUsageLogCacheMetrics,
+} from '../../lib/cache-hit-rate'
 import {
   parseLogOther,
   getParamOverrideActionLabel,
@@ -399,12 +409,14 @@ function BillingBreakdown(props: {
 }
 
 function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const { log, other } = props
 
   const promptTokens = log.prompt_tokens || 0
   const completionTokens = log.completion_tokens || 0
-  const cacheRead = other.cache_tokens || 0
+  const cacheMetrics = getUsageLogCacheMetrics(log, other)
+  const cacheRead = cacheMetrics.cacheReadTokens
   const cacheWrite = other.cache_creation_tokens || 0
   const cacheWrite5m = other.cache_creation_tokens_5m || 0
   const cacheWrite1h = other.cache_creation_tokens_1h || 0
@@ -412,7 +424,11 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
   // cache_creation_tokens counts OpenAI 30-minute and 12-hour writes together.
   const cacheWrite30m =
     cacheWrite12h > 0 ? Math.max(cacheWrite - cacheWrite12h, 0) : 0
-  const hasTokens = promptTokens > 0 || completionTokens > 0
+  const hasTokens =
+    promptTokens > 0 ||
+    completionTokens > 0 ||
+    cacheRead > 0 ||
+    cacheMetrics.cacheWriteTokens > 0
 
   if (!hasTokens) return null
 
@@ -426,16 +442,26 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
 
   const rows: Array<{ label: string; value: string }> = []
 
-  rows.push({ label: t('Input Tokens'), value: promptTokens.toLocaleString() })
+  rows.push({
+    label: t('Input Tokens'),
+    value: formatNumber(promptTokens, locale),
+  })
   rows.push({
     label: t('Output Tokens'),
-    value: completionTokens.toLocaleString(),
+    value: formatNumber(completionTokens, locale),
   })
 
   if (cacheRead > 0) {
     rows.push({
       label: t('Cache Read'),
-      value: cacheRead.toLocaleString(),
+      value: formatNumber(cacheRead, locale),
+    })
+  }
+
+  if (cacheMetrics.hitRate !== null) {
+    rows.push({
+      label: t('Cache Hit Rate'),
+      value: `${formatCacheHitRate(cacheMetrics.hitRate, locale)} (${formatNumber(cacheRead, locale)} / ${formatNumber(cacheMetrics.totalInputTokens, locale)})`,
     })
   }
 

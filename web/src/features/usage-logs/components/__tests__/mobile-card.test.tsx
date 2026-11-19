@@ -269,6 +269,53 @@ it('retains the user avatar and model badge in the mobile summary', () => {
   expect(modelButton.querySelector('[data-slot="status-badge"]')).not.toBeNull()
 })
 
+it('shows cache hit rate on the mobile card and hides it when the column is hidden', () => {
+  const { rerender } = renderLogs()
+  expect(screen.getByText('Cache Hit Rate')).toBeVisible()
+  expect(screen.getByText('25%')).toBeVisible()
+
+  rerender(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <UsageLogsProvider>
+        <Fixture visibility={{ cache_hit_rate: false }} />
+      </UsageLogsProvider>
+    </QueryClientProvider>
+  )
+  expect(screen.queryByText('Cache Hit Rate')).not.toBeInTheDocument()
+})
+
+it('keeps fully cached Claude logs visible when prompt and completion tokens are zero', async () => {
+  const user = userEvent.setup()
+  renderLogs({
+    logs: [
+      {
+        ...log,
+        model_name: 'claude-sonnet-4-6',
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        other: JSON.stringify({
+          usage_semantic: 'anthropic',
+          claude: true,
+          cache_tokens: 8000,
+          model_ratio: 1,
+        }),
+      },
+    ],
+  })
+
+  expect(screen.getByText('Cache ↓ 8,000')).toBeVisible()
+  expect(screen.getByText('100%')).toBeVisible()
+
+  await user.click(screen.getByTitle('Click to view full details'))
+  const dialog = await screen.findByRole('dialog')
+  expect(within(dialog).getByText('Token Breakdown')).toBeVisible()
+  expect(within(dialog).getByText('100% (8,000 / 8,000)')).toBeVisible()
+})
+
 it('omits unused token and throughput placeholders for async jobs', () => {
   renderLogs({
     logs: [

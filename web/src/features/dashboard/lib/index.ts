@@ -34,11 +34,20 @@ export {
 } from './api-info'
 export { processChartData, processUserChartData } from './charts'
 export {
+  formatDashboardHitRate,
+  processCacheHitRateChartData,
+} from './cache-hit-rate-charts'
+export {
   buildDashboardFlowData,
   buildFlowSankeySpec,
   flowNodeFilterFromSankeyDatum,
   flowSankeyDatumValue,
   getFlowStages,
 } from './flow'
-export { safeDivide, calculateDashboardStats } from './stats'
+export {
+  safeDivide,
+  calculateDashboardStats,
+  computeCacheHitRatePercent,
+  getRowCacheHitMetrics,
+} from './stats'
 export { getPreviewText } from './text'

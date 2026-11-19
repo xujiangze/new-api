@@ -272,6 +272,7 @@ export interface LogOtherData {
   text_input?: number
   text_output?: number
   cache_tokens?: number
+  cache_write_tokens?: number
   image_cache_tokens?: number
   billing_tokens?: Record<string, number>
   cache_creation_tokens?: number
@@ -279,6 +280,8 @@ export interface LogOtherData {
   cache_creation_tokens_1h?: number
   cache_creation_tokens_12h?: number
   claude?: boolean
+  usage_semantic?: string
+  input_tokens_total?: number
   model_ratio?: number
   completion_ratio?: number
   model_price?: number

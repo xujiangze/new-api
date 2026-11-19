@@ -28,8 +28,10 @@ export interface QuotaDataItem {
   username?: string
   model_name?: string
   created_at: number
+  input_tokens?: number
   cache_read_tokens?: number
   cache_creation_tokens?: number
+  cache_hit_read_tokens?: number
   token_used?: number
   count?: number
   quota?: number
@@ -197,6 +199,8 @@ export type ConsumptionDistributionChartType = 'bar' | 'area'
 
 export type ModelAnalyticsChartTab = 'trend' | 'proportion' | 'top'
 
+export type CacheHitRateChartTab = 'trend' | 'comparison'
+
 export interface DashboardChartPreferences {
   consumptionDistributionChart: ConsumptionDistributionChartType
   modelAnalyticsChart: ModelAnalyticsChartTab
@@ -251,6 +255,16 @@ export interface ProcessedChartData {
 export interface ProcessedUserChartData {
   spec_user_rank: VChartSpec
   spec_user_trend: VChartSpec
+}
+
+export interface ProcessedCacheHitRateChartData {
+  spec_hit_rate_trend: VChartSpec
+  spec_hit_rate_comparison: VChartSpec
+  overallHitRate: number
+  overallHitRateDisplay: string
+  totalInputTokens: number
+  totalHitReadTokens: number
+  totalCacheCreationTokens: number
 }
 
 // ============================================================================

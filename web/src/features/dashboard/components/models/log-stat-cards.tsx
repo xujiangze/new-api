@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { IconBadge } from '@/components/ui/icon-badge'
@@ -26,6 +26,7 @@ import { useModelStatCardsConfig } from '@/features/dashboard/hooks/use-dashboar
 import {
   buildQueryParams,
   calculateDashboardStats,
+  formatDashboardHitRate,
   getDefaultDays,
 } from '@/features/dashboard/lib'
 import type {
@@ -35,11 +36,11 @@ import type {
 import { toIntlLocale } from '@/i18n/languages'
 import { formatCompactNumber, formatNumber, formatQuota } from '@/lib/format'
 import { computeTimeRange } from '@/lib/time'
-import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
 interface LogStatCardsProps {
   filters?: DashboardFilters
+  selectedModels?: string[]
   onDataUpdate?: (data: QuotaDataItem[], loading: boolean) => void
 }
 
@@ -63,9 +64,7 @@ export function LogStatCards(props: LogStatCardsProps) {
   const statCardsConfig = useModelStatCardsConfig()
   const user = useAuthStore((state) => state.auth.user)
   const isAdmin = !!(user?.role && user.role >= 10)
-  const [stats, setStats] = useState<ReturnType<
-    typeof calculateDashboardStats
-  > | null>(null)
+  const [rawData, setRawData] = useState<QuotaDataItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
 
@@ -93,12 +92,12 @@ export function LogStatCards(props: LogStatCardsProps) {
       .then((res) => {
         if (abortController.signal.aborted) return
         const data = res?.data || []
-        setStats(calculateDashboardStats(data))
+        setRawData(data)
         onDataUpdate?.(data, false)
       })
       .catch(() => {
         if (abortController.signal.aborted) return
-        setStats(null)
+        setRawData([])
         setError(true)
         onDataUpdate?.([], false)
       })
@@ -113,24 +112,49 @@ export function LogStatCards(props: LogStatCardsProps) {
     }
   }, [filters, isAdmin, onDataUpdate])
 
+  const filteredData = useMemo(() => {
+    const selected = props.selectedModels
+    if (!selected || selected.length === 0) return rawData
+    const selectedSet = new Set(selected)
+    return rawData.filter((item) =>
+      selectedSet.has(item.model_name || 'Unknown')
+    )
+  }, [rawData, props.selectedModels])
+
+  const stats = useMemo(
+    () => (error ? null : calculateDashboardStats(filteredData)),
+    [error, filteredData]
+  )
+
   const adaptedStats = {
     rpm: stats?.totalCount ?? 0,
     quota: stats?.totalQuota ?? 0,
     tpm: stats?.totalTokens ?? 0,
     cacheRead: stats?.totalCacheReadTokens ?? 0,
     cacheCreation: stats?.totalCacheCreationTokens ?? 0,
+    cacheHitRate: stats?.cacheHitRate ?? 0,
   }
+
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
 
   const items = statCardsConfig.map((config) => {
     const rawValue = config.getValue(adaptedStats, timeRangeMinutes)
-    const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
-    const formatted =
-      config.key === 'quota'
-        ? {
-            displayValue: formatQuota(rawValue),
-            fullValue: formatQuota(rawValue),
-          }
-        : formatStatNumber(rawValue, locale)
+    let formatted: { displayValue: string; fullValue: string }
+    if (config.key === 'quota') {
+      const value = formatQuota(rawValue)
+      formatted = { displayValue: value, fullValue: value }
+    } else if (config.key === 'cacheHitRate') {
+      const rateDisplay = formatDashboardHitRate(rawValue, locale)
+      const hitRead = stats?.totalCacheHitReadTokens ?? 0
+      const inputTokens = stats?.totalInputTokens ?? 0
+      const detail =
+        inputTokens > 0
+          ? `${rateDisplay} (${formatNumber(hitRead, locale)} / ${formatNumber(inputTokens, locale)})`
+          : rateDisplay
+      formatted = { displayValue: rateDisplay, fullValue: detail }
+    } else {
+      formatted = formatStatNumber(rawValue, locale)
+    }
 
     return {
       key: config.key,
@@ -145,8 +169,8 @@ export function LogStatCards(props: LogStatCardsProps) {
 
   return (
     <div className='overflow-hidden rounded-lg border'>
-      <div className='divide-border/60 grid min-w-0 grid-cols-2 divide-x sm:grid-cols-3 lg:grid-cols-7'>
-        {items.map((it, idx) => {
+      <div className='bg-border/60 grid min-w-0 grid-cols-2 gap-px sm:grid-cols-4 lg:grid-cols-4'>
+        {items.map((it) => {
           const Icon = it.icon
           let valueContent
           if (loading) {
@@ -189,12 +213,7 @@ export function LogStatCards(props: LogStatCardsProps) {
               role='group'
               aria-label={it.title}
               aria-busy={loading}
-              className={cn(
-                'min-w-0 px-2.5 py-1.5 sm:px-3 sm:py-4 xl:px-4',
-                idx === items.length - 1 &&
-                  items.length % 2 !== 0 &&
-                  'col-span-2 sm:col-span-1'
-              )}
+              className='bg-background min-w-0 px-2.5 py-2 sm:px-3 sm:py-4 xl:px-4'
             >
               <div className='flex min-w-0 items-center gap-1.5 sm:gap-2'>
                 <IconBadge
@@ -217,11 +236,6 @@ export function LogStatCards(props: LogStatCardsProps) {
           )
         })}
       </div>
-      {/*<p className='text-muted-foreground border-t px-3 py-2 text-xs'>*/}
-      {/*  {t(*/}
-      {/*    'Cache usage is recorded only after the upgrade; historical data is not backfilled.'*/}
-      {/*  )}*/}
-      {/*</p>*/}
     </div>
   )
 }

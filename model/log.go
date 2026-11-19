@@ -397,6 +397,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			// Do not add the 5m/1h breakdown again or infer tokens from prices.
 			cacheCreationTokens, _ = other.public["cache_write_tokens"].(int)
 		}
+		inputTokens := normalizedConsumeInputTokens(params.PromptTokens, cacheReadTokens, cacheCreationTokens, other)
 		LogQuotaData(QuotaDataLogParams{
 			UserID:              userId,
 			Username:            username,
@@ -404,6 +405,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			Quota:               params.Quota,
 			CreatedAt:           createdAt,
 			TokenUsed:           params.PromptTokens + params.CompletionTokens,
+			InputTokens:         inputTokens,
 			CacheReadTokens:     int64(cacheReadTokens),
 			CacheCreationTokens: int64(cacheCreationTokens),
 			UseGroup:            params.Group,
@@ -412,6 +414,24 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			NodeName:            common.NodeName,
 		})
 	}
+}
+
+// normalizedConsumeInputTokens returns total prompt input tokens across
+// provider dialects so cache hit rates use a consistent denominator:
+//   - Anthropic/Claude: prompt_tokens excludes cache read & write, so total = prompt + cache_read + cache_write
+//   - OpenAI/Gemini/other: prompt_tokens already includes cached tokens, so total = prompt
+func normalizedConsumeInputTokens(promptTokens, cacheReadTokens, cacheCreationTokens int, other *LogOther) int64 {
+	if other != nil {
+		if total, ok := other.public["input_tokens_total"].(int); ok && total > 0 {
+			return int64(total)
+		}
+		semantic, _ := other.public["usage_semantic"].(string)
+		isClaude, _ := other.public["claude"].(bool)
+		if semantic == "anthropic" || (semantic == "" && isClaude) {
+			return int64(max(0, promptTokens)) + int64(max(0, cacheReadTokens)) + int64(max(0, cacheCreationTokens))
+		}
+	}
+	return int64(max(0, promptTokens))
 }
 
 type RecordTaskBillingLogParams struct {

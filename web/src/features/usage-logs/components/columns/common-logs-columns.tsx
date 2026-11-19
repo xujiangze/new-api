@@ -47,14 +47,23 @@ import {
 import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
 import { taskUsageUnitLabel } from '@/features/pricing/lib/task-price-display'
 import type { BillingUsageSchema } from '@/features/pricing/types'
+import { toIntlLocale } from '@/i18n/languages'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatNumber,
+  formatTimestampToDate,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { LOG_TYPE_ALL_VALUE } from '../../constants'
 import type { UsageLog } from '../../data/schema'
+import {
+  formatCacheHitRate,
+  getUsageLogCacheMetrics,
+} from '../../lib/cache-hit-rate'
 import {
   formatModelName,
   decodeBillingExprB64,
@@ -354,7 +363,8 @@ export function useCommonLogsColumns(
   isRoot: boolean,
   showBillingSource = false
 ): ColumnDef<UsageLog>[] {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const currency = useSystemConfigStore((state) => state.config.currency)
   return useMemo(() => {
     const columns: ColumnDef<UsageLog>[] = [
@@ -740,34 +750,35 @@ export function useCommonLogsColumns(
 
           const promptTokens = log.prompt_tokens || 0
           const completionTokens = log.completion_tokens || 0
-          if (promptTokens === 0 && completionTokens === 0) {
+          const { cacheReadTokens, cacheWriteTokens } = getUsageLogCacheMetrics(
+            log,
+            other
+          )
+          if (
+            promptTokens === 0 &&
+            completionTokens === 0 &&
+            cacheReadTokens === 0 &&
+            cacheWriteTokens === 0
+          ) {
             return <span className='text-muted-foreground text-xs'>-</span>
           }
-
-          const cacheReadTokens = other?.cache_tokens || 0
-          const cacheWrite5m = other?.cache_creation_tokens_5m || 0
-          const cacheWrite1h = other?.cache_creation_tokens_1h || 0
-          const hasSplitCache = cacheWrite5m > 0 || cacheWrite1h > 0
-          const cacheWriteTokens = hasSplitCache
-            ? cacheWrite5m + cacheWrite1h
-            : other?.cache_creation_tokens || 0
 
           return (
             <div className='flex flex-col gap-0.5'>
               <span className='font-mono text-xs font-medium tabular-nums'>
-                {promptTokens.toLocaleString()} /{' '}
-                {completionTokens.toLocaleString()}
+                {formatNumber(promptTokens, locale)} /{' '}
+                {formatNumber(completionTokens, locale)}
               </span>
               {(cacheReadTokens > 0 || cacheWriteTokens > 0) && (
                 <div className='flex items-center gap-1 text-[11px]'>
                   {cacheReadTokens > 0 && (
                     <span className='text-muted-foreground/60'>
-                      {t('Cache')}↓ {cacheReadTokens.toLocaleString()}
+                      {t('Cache')}↓ {formatNumber(cacheReadTokens, locale)}
                     </span>
                   )}
                   {cacheWriteTokens > 0 && (
                     <span className='text-muted-foreground/60'>
-                      ↑ {cacheWriteTokens.toLocaleString()}
+                      ↑ {formatNumber(cacheWriteTokens, locale)}
                     </span>
                   )}
                 </div>
@@ -775,6 +786,52 @@ export function useCommonLogsColumns(
             </div>
           )
         },
+      },
+      {
+        id: 'cache_hit_rate',
+        header: t('Cache Hit Rate'),
+        cell: ({ row }) => {
+          const log = row.original
+          if (!isDisplayableLogType(log.type)) return null
+
+          const other = parseLogOther(log.other)
+          const { hitRate, cacheReadTokens, totalInputTokens } =
+            getUsageLogCacheMetrics(log, other)
+
+          if (hitRate === null) {
+            return <span className='text-muted-foreground text-xs'>-</span>
+          }
+
+          const formattedRate = formatCacheHitRate(hitRate, locale)
+          const rateTone =
+            hitRate > 0
+              ? 'font-medium text-emerald-600 dark:text-emerald-400'
+              : 'text-muted-foreground'
+
+          return (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      className={cn(
+                        'inline-block font-mono text-xs tabular-nums',
+                        rateTone
+                      )}
+                    />
+                  }
+                >
+                  {formattedRate}
+                </TooltipTrigger>
+                <TooltipContent side='top' className='font-mono text-xs'>
+                  {t('Cache Read')}: {formatNumber(cacheReadTokens, locale)} /{' '}
+                  {formatNumber(totalInputTokens, locale)}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )
+        },
+        meta: { label: t('Cache Hit Rate') },
       },
       {
         accessorKey: 'quota',
@@ -907,5 +964,5 @@ export function useCommonLogsColumns(
     return columns
     // Log formatters read currency settings from the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, isAdmin, isRoot, showBillingSource, currency])
+  }, [t, locale, isAdmin, isRoot, showBillingSource, currency])
 }

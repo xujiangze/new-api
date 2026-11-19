@@ -22,6 +22,7 @@ import {
   Layers,
   Download,
   Upload,
+  Percent,
   Gauge,
   Zap,
   Flame,
@@ -72,6 +73,15 @@ export function useModelStatCardsConfig(): StatCardConfig[] {
       getValue: (stat) => stat?.tpm ?? 0,
     },
     {
+      key: 'avgRpm',
+      title: t('Average RPM'),
+      description: t('Requests per minute'),
+      icon: Gauge,
+      iconTone: 'chart-2',
+      getValue: (stat, timeRangeMinutes = 1) =>
+        safeDivide(stat?.rpm ?? 0, timeRangeMinutes),
+    },
+    {
       key: 'cacheRead',
       title: t('Cache Read'),
       description: t('Statistical tokens'),
@@ -88,13 +98,12 @@ export function useModelStatCardsConfig(): StatCardConfig[] {
       getValue: (stat) => stat?.cacheCreation ?? 0,
     },
     {
-      key: 'avgRpm',
-      title: t('Average RPM'),
-      description: t('Requests per minute'),
-      icon: Gauge,
-      iconTone: 'chart-2',
-      getValue: (stat, timeRangeMinutes = 1) =>
-        safeDivide(stat?.rpm ?? 0, timeRangeMinutes),
+      key: 'cacheHitRate',
+      title: t('Cache Hit Rate'),
+      description: t('Cache read / total input'),
+      icon: Percent,
+      iconTone: 'chart-1',
+      getValue: (stat) => stat?.cacheHitRate ?? 0,
     },
     {
       key: 'avgTpm',

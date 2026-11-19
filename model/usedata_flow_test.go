@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -190,4 +191,206 @@ func TestLogQuotaDataSplitsRowsByUseGroupTokenChannelAndNode(t *testing.T) {
 	require.Equal(t, 60, rows[0].TokenUsed)
 	require.Equal(t, "default", rows[1].UseGroup)
 	require.Equal(t, 25, rows[1].Quota)
+}
+
+func TestNormalizedConsumeInputTokens(t *testing.T) {
+	tests := []struct {
+		name                string
+		promptTokens        int
+		cacheReadTokens     int
+		cacheCreationTokens int
+		other               *LogOther
+		want                int64
+	}{
+		{
+			name:                "openai includes cached tokens in prompt_tokens",
+			promptTokens:        2000,
+			cacheReadTokens:     1500,
+			cacheCreationTokens: 200,
+			other:               NewLogOther(),
+			want:                2000,
+		},
+		{
+			name:                "anthropic sums uncached prompt with cache read and write",
+			promptTokens:        50,
+			cacheReadTokens:     5000,
+			cacheCreationTokens: 5000,
+			other: func() *LogOther {
+				o := NewLogOther()
+				o.SetPublic("usage_semantic", "anthropic")
+				o.SetPublic("claude", true)
+				return o
+			}(),
+			want: 10050,
+		},
+		{
+			name:                "anthropic 100 percent cached prompt with zero uncached tokens",
+			promptTokens:        0,
+			cacheReadTokens:     8000,
+			cacheCreationTokens: 0,
+			other: func() *LogOther {
+				o := NewLogOther()
+				o.SetPublic("usage_semantic", "anthropic")
+				return o
+			}(),
+			want: 8000,
+		},
+		{
+			name:                "legacy claude flag without usage_semantic sums cache tokens",
+			promptTokens:        100,
+			cacheReadTokens:     400,
+			cacheCreationTokens: 500,
+			other: func() *LogOther {
+				o := NewLogOther()
+				o.SetPublic("claude", true)
+				return o
+			}(),
+			want: 1000,
+		},
+		{
+			name:                "explicit input_tokens_total takes precedence",
+			promptTokens:        50,
+			cacheReadTokens:     400,
+			cacheCreationTokens: 500,
+			other: func() *LogOther {
+				o := NewLogOther()
+				o.SetPublic("input_tokens_total", 950)
+				return o
+			}(),
+			want: 950,
+		},
+		{
+			name:                "non-token request returns zero",
+			promptTokens:        0,
+			cacheReadTokens:     0,
+			cacheCreationTokens: 0,
+			other:               nil,
+			want:                0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizedConsumeInputTokens(tc.promptTokens, tc.cacheReadTokens, tc.cacheCreationTokens, tc.other)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestQuotaDataInputTokensAndCacheHitReadAggregation(t *testing.T) {
+	truncateTables(t)
+	CacheQuotaDataLock.Lock()
+	CacheQuotaData = make(map[string]*QuotaData)
+	CacheQuotaDataLock.Unlock()
+
+	// Pre-upgrade row: cache_read_tokens recorded, input_tokens is 0.
+	seedFlowQuotaData(t, QuotaData{
+		UserID:              1,
+		Username:            "alice",
+		ModelName:           "claude-sonnet",
+		CreatedAt:           3600,
+		UseGroup:            "default",
+		TokenID:             1,
+		ChannelID:           1,
+		NodeName:            "node-a",
+		Count:               2,
+		Quota:               100,
+		TokenUsed:           200,
+		InputTokens:         0,
+		CacheReadTokens:     500000,
+		CacheCreationTokens: 10000,
+	})
+
+	// Post-upgrade rows written via LogQuotaData across two flushes (insert + increaseQuotaData).
+	LogQuotaData(QuotaDataLogParams{
+		UserID:              1,
+		Username:            "alice",
+		ModelName:           "claude-sonnet",
+		CreatedAt:           3610,
+		UseGroup:            "default",
+		TokenID:             2,
+		ChannelID:           1,
+		NodeName:            "node-a",
+		Quota:               50,
+		TokenUsed:           100,
+		InputTokens:         120000,
+		CacheReadTokens:     60000,
+		CacheCreationTokens: 5000,
+	})
+	SaveQuotaDataCache()
+
+	LogQuotaData(QuotaDataLogParams{
+		UserID:              1,
+		Username:            "alice",
+		ModelName:           "claude-sonnet",
+		CreatedAt:           3650,
+		UseGroup:            "default",
+		TokenID:             2,
+		ChannelID:           1,
+		NodeName:            "node-a",
+		Quota:               30,
+		TokenUsed:           80,
+		InputTokens:         80000,
+		CacheReadTokens:     40000,
+		CacheCreationTokens: 2000,
+	})
+	SaveQuotaDataCache()
+
+	// Anomalous row where upstream reported cache_read_tokens > input_tokens.
+	seedFlowQuotaData(t, QuotaData{
+		UserID:          2,
+		Username:        "bob",
+		ModelName:       "gpt-5",
+		CreatedAt:       7200,
+		Count:           1,
+		Quota:           20,
+		TokenUsed:       1200,
+		InputTokens:     1000,
+		CacheReadTokens: 1500,
+	})
+
+	allRows, err := GetAllQuotaDates(0, 10000, "")
+	require.NoError(t, err)
+	require.Len(t, allRows, 2)
+
+	byModel := make(map[string]*QuotaDataStats, len(allRows))
+	for _, row := range allRows {
+		byModel[row.ModelName] = row
+	}
+
+	claudeRow := byModel["claude-sonnet"]
+	require.NotNil(t, claudeRow)
+	assert.Equal(t, int64(200000), claudeRow.InputTokens)
+	assert.Equal(t, int64(600000), claudeRow.CacheReadTokens)
+	assert.Equal(t, int64(17000), claudeRow.CacheCreationTokens)
+	// Pre-upgrade row with input_tokens=0 is excluded from CacheHitReadTokens.
+	assert.Equal(t, int64(100000), claudeRow.CacheHitReadTokens)
+
+	gptRow := byModel["gpt-5"]
+	require.NotNil(t, gptRow)
+	assert.Equal(t, int64(1000), gptRow.InputTokens)
+	assert.Equal(t, int64(1500), gptRow.CacheReadTokens)
+	// Row-level cap keeps CacheHitReadTokens <= InputTokens.
+	assert.Equal(t, int64(1000), gptRow.CacheHitReadTokens)
+
+	userRows, err := GetQuotaDataByUserId(1, 0, 10000)
+	require.NoError(t, err)
+	require.Len(t, userRows, 1)
+	assert.Equal(t, int64(200000), userRows[0].InputTokens)
+	assert.Equal(t, int64(100000), userRows[0].CacheHitReadTokens)
+
+	usernameRows, err := GetQuotaDataByUsername("alice", 0, 10000)
+	require.NoError(t, err)
+	require.Len(t, usernameRows, 1)
+	assert.Equal(t, int64(200000), usernameRows[0].InputTokens)
+	assert.Equal(t, int64(100000), usernameRows[0].CacheHitReadTokens)
+
+	// Verify flattened JSON contract expected by the web dashboard.
+	raw, err := common.Marshal(claudeRow)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal(raw, &payload))
+	assert.Equal(t, float64(200000), payload["input_tokens"])
+	assert.Equal(t, float64(600000), payload["cache_read_tokens"])
+	assert.Equal(t, float64(100000), payload["cache_hit_read_tokens"])
 }

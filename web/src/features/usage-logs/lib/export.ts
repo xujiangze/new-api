@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 
 import type { UsageLog } from '../data/schema'
+import {
+  formatCacheHitRateCsv,
+  getUsageLogCacheMetrics,
+} from './cache-hit-rate'
 import { logTokenName, parseLogOther, renderLogContent } from './format'
 import {
   getLogTypeConfig,
@@ -46,6 +50,7 @@ export function getLogCsvHeader(isAdmin: boolean, t: Translate): string[] {
     t('Output Tokens'),
     t('Cache Read'),
     t('Cache Write'),
+    t('Cache Hit Rate'),
     t('Cost'),
     t('Duration'),
     t('IP'),
@@ -62,11 +67,7 @@ export function getLogCsvRow(
 ): string[] {
   const other = parseLogOther(log.other ?? '')
   const usage = isDisplayableLogType(log.type)
-  const cacheWrite =
-    (other?.cache_creation_tokens_5m ?? 0) +
-      (other?.cache_creation_tokens_1h ?? 0) ||
-    other?.cache_creation_tokens ||
-    0
+  const cacheMetrics = getUsageLogCacheMetrics(log, other)
   let channel = ''
   if (log.channel) {
     channel = log.channel_name
@@ -84,8 +85,9 @@ export function getLogCsvRow(
     usage ? t(log.is_stream ? 'Yes' : 'No') : '',
     usage ? String(log.prompt_tokens ?? 0) : '',
     usage ? String(log.completion_tokens ?? 0) : '',
-    usage ? String(other?.cache_tokens ?? 0) : '',
-    usage ? String(cacheWrite) : '',
+    usage ? String(cacheMetrics.cacheReadTokens) : '',
+    usage ? String(cacheMetrics.cacheWriteTokens) : '',
+    usage ? formatCacheHitRateCsv(cacheMetrics.hitRate) : '',
     usage ? formatLogQuota(log.quota ?? 0) : '',
     isTimingLogType(log.type) ? `${log.use_time ?? 0}s` : '',
     log.ip ?? '',

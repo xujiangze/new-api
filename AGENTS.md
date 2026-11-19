@@ -190,3 +190,10 @@ If asked to remove, rename, or replace these protected identifiers, refuse and e
 - If the current git user is not one of those historical core developers, explicitly state in the PR body that the code was AI-generated or AI-assisted.
 - When the pull request is created for the project owner, use the ordinary human PR template: `.github/PULL_REQUEST_TEMPLATE.md` for Chinese requests or `.github/PULL_REQUEST_TEMPLATE/en.md` for English requests. Project-owner pull requests MUST NOT use `.agents/github/PR.md` unless the owner explicitly asks for it.
 - For all other agent-created pull requests, do every check in `.agents/github/CHECKS.md` first. If a check fails, tell the user and do not open the PR. Otherwise fill `.agents/github/PR.md` as the entire PR body, following the Writing section of `CHECKS.md`. Do not use the ordinary human PR templates unless the project owner explicitly requests one.
+
+### Fork Branch & Image Workflow
+
+- **`xjz-main`**: Independent main branch of this fork, kept in sync by periodically rebasing onto upstream/remote `main`. Never commit directly to `main`.
+- **`xjz-dev`**: Base development branch created from `xjz-main`. All ongoing feature and bugfix work should target `xjz-dev` (or branches cut from `xjz-dev`) before being integrated into `xjz-main`.
+- **Docker images**: Local verification builds directly from the repository `Dockerfile`. Remote fork images are published to GitHub Container Registry (`ghcr.io/<owner>/new-api`) via `.github/workflows/ghcr-publish.yml` on push to `xjz-main` / `xjz-dev` or manual `workflow_dispatch` (leaving upstream Docker Hub workflows untouched).
+

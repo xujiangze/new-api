@@ -1,0 +1,164 @@
+name: Publish Fork Docker Image (GHCR)
+
+on:
+  push:
+    branches:
+      - xjz-main
+      - xjz-dev
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or git ref to build (defaults to current branch)"
+        required: false
+        type: string
+
+concurrency:
+  group: ghcr-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Prepare GHCR tags
+    if: github.repository != 'QuantumNous/new-api'
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.version.outputs.ref }}
+      sha: ${{ steps.version.outputs.sha }}
+      image: ${{ steps.version.outputs.image }}
+      tag_prefix: ${{ steps.version.outputs.tag_prefix }}
+      version: ${{ steps.version.outputs.version }}
+      is_main: ${{ steps.version.outputs.is_main }}
+    permissions:
+      contents: read
+    steps:
+      - name: Check out ref
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          ref: ${{ inputs.ref || github.ref_name }}
+
+      - name: Resolve GHCR image & tags
+        id: version
+        env:
+          TARGET_REF: ${{ inputs.ref || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          IMAGE=$(printf 'ghcr.io/%s' "$REPO" | tr '[:upper:]' '[:lower:]')
+          TAG_PREFIX=$(printf '%s' "$TARGET_REF" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g; s/^[.-]+//; s/[.-]+$//')
+          TAG_PREFIX=${TAG_PREFIX:0:105}
+          TAG_PREFIX=$(printf '%s' "$TAG_PREFIX" | sed -E 's/[.-]+$//')
+          if [ -z "$TAG_PREFIX" ]; then
+            echo "::error::Ref '$TARGET_REF' cannot be converted to a valid Docker tag prefix"
+            exit 1
+          fi
+
+          SHA=$(git rev-parse HEAD)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          VERSION="${TAG_PREFIX}-$(date +'%Y%m%d')-${SHORT_SHA}"
+          IS_MAIN="false"
+          if [ "$TARGET_REF" = "xjz-main" ]; then
+            IS_MAIN="true"
+          fi
+
+          echo "ref=$TARGET_REF" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "tag_prefix=$TAG_PREFIX" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_main=$IS_MAIN" >> "$GITHUB_OUTPUT"
+
+  build_single_arch:
+    name: Build & push (${{ matrix.arch }}) [GHCR]
+    needs: [prepare]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - name: Write VERSION
+        run: |
+          echo "${{ needs.prepare.outputs.version }}" > VERSION
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (labels)
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: |
+            ${{ needs.prepare.outputs.image }}
+
+      - name: Build & push single-arch
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.tag_prefix }}-${{ matrix.arch }}
+            ${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.version }}-${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=ghcr-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=ghcr-${{ matrix.arch }}
+
+  create_manifests:
+    name: Create multi-arch manifests (GHCR)
+    needs: [prepare, build_single_arch]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create & push multi-arch manifests
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          TAG_PREFIX: ${{ needs.prepare.outputs.tag_prefix }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          IS_MAIN: ${{ needs.prepare.outputs.is_main }}
+        run: |
+          docker buildx imagetools create \
+            -t "${IMAGE}:${TAG_PREFIX}" \
+            "${IMAGE}:${TAG_PREFIX}-amd64" \
+            "${IMAGE}:${TAG_PREFIX}-arm64"
+
+          docker buildx imagetools create \
+            -t "${IMAGE}:${VERSION}" \
+            "${IMAGE}:${VERSION}-amd64" \
+            "${IMAGE}:${VERSION}-arm64"
+
+          if [ "$IS_MAIN" = "true" ]; then
+            docker buildx imagetools create \
+              -t "${IMAGE}:latest" \
+              "${IMAGE}:${TAG_PREFIX}-amd64" \
+              "${IMAGE}:${TAG_PREFIX}-arm64"
+          fi

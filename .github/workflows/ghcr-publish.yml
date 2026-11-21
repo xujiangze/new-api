@@ -27,7 +27,6 @@ jobs:
       image: ${{ steps.version.outputs.image }}
       tag_prefix: ${{ steps.version.outputs.tag_prefix }}
       version: ${{ steps.version.outputs.version }}
-      is_main: ${{ steps.version.outputs.is_main }}
     permissions:
       contents: read
     steps:
@@ -55,17 +54,12 @@ jobs:
           SHA=$(git rev-parse HEAD)
           SHORT_SHA=$(git rev-parse --short HEAD)
           VERSION="${TAG_PREFIX}-$(date +'%Y%m%d')-${SHORT_SHA}"
-          IS_MAIN="false"
-          if [ "$TARGET_REF" = "xjz-main" ]; then
-            IS_MAIN="true"
-          fi
 
           echo "ref=$TARGET_REF" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "tag_prefix=$TAG_PREFIX" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "is_main=$IS_MAIN" >> "$GITHUB_OUTPUT"
 
   build_single_arch:
     name: Build & push (${{ matrix.arch }}) [GHCR]
@@ -144,7 +138,6 @@ jobs:
           IMAGE: ${{ needs.prepare.outputs.image }}
           TAG_PREFIX: ${{ needs.prepare.outputs.tag_prefix }}
           VERSION: ${{ needs.prepare.outputs.version }}
-          IS_MAIN: ${{ needs.prepare.outputs.is_main }}
         run: |
           docker buildx imagetools create \
             -t "${IMAGE}:${TAG_PREFIX}" \
@@ -155,10 +148,3 @@ jobs:
             -t "${IMAGE}:${VERSION}" \
             "${IMAGE}:${VERSION}-amd64" \
             "${IMAGE}:${VERSION}-arm64"
-
-          if [ "$IS_MAIN" = "true" ]; then
-            docker buildx imagetools create \
-              -t "${IMAGE}:latest" \
-              "${IMAGE}:${TAG_PREFIX}-amd64" \
-              "${IMAGE}:${TAG_PREFIX}-arm64"
-          fi

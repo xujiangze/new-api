@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -109,6 +110,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	}
 
 	defer service.CloseResponseBodyGracefully(resp)
+	if info.RelayFormat == types.RelayFormatOpenAI && info.RelayMode == relayconstant.RelayModeChatCompletions {
+		defer helper.StartCancelledUsage(c, info, resp)()
+	}
 
 	model := info.UpstreamModelName
 	var responseId string
@@ -120,12 +124,15 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var usage = &dto.Usage{}
 	var lastStreamData string
 	var secondLastStreamData string // 保留倒数第二个stream data；部分兼容网关把完整usage放在倒数第二个事件
+	var observedUsage *dto.Usage
+	var inputReported, outputReported, cacheReported bool
+	trackCancel := helper.TracksCancelledUsage(c)
 	seenStreamToolCalls := make(map[string]struct{})
 	var streamFunctionCallNames []string
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-		if lastStreamData != "" {
-			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+		if lastStreamData != "" && !helper.StreamClientGone(c) {
+			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil && !helper.StreamClientGone(c) {
 				common.SysLog(common.LogText("error handling stream format: %s", err.Error()))
 				sr.Error(err)
 			}
@@ -136,10 +143,37 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 
 			lastStreamData = data
-			observeStreamChoices(info, data, seenStreamToolCalls, &streamFunctionCallNames)
+			streamResponse := observeStreamChoices(info, data, seenStreamToolCalls, &streamFunctionCallNames)
 			if err := processTokenData(info, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, common.LogText("error processing stream token data: %s", err.Error()))
 				sr.Error(err)
+			}
+			if trackCancel {
+				wireUsage := ojson.Get(data, "usage")
+				current := streamResponse.Usage
+				if current == nil {
+					if info.ChannelType != constant.ChannelTypeOpenAI || !helper.ReportedTokenCount(ojson.Get(data, "timings.cache_n")) {
+						return
+					}
+					current = &dto.Usage{}
+				}
+				applyUsagePostProcessing(info, current, common.StringToByteSlice(data))
+				observedUsage = dto.MergeUsageNonZero(observedUsage, current)
+				if helper.ReportedTokenCount(wireUsage.Get("prompt_tokens")) {
+					inputReported = true
+					observedUsage.PromptTokens = current.PromptTokens
+				}
+				if helper.ReportedTokenCount(wireUsage.Get("completion_tokens")) {
+					outputReported = true
+					observedUsage.CompletionTokens = current.CompletionTokens
+				}
+				if count, reported := reportedStreamCacheTokens(info, wireUsage, data, current); reported {
+					cacheReported = true
+					observedUsage.PromptTokensDetails.CachedTokens = count
+					if observedUsage.InputTokensDetails != nil {
+						observedUsage.InputTokensDetails.CachedTokens = count
+					}
+				}
 			}
 		}
 	})
@@ -176,34 +210,65 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 	}
 
-	if info.RelayFormat == types.RelayFormatOpenAI {
+	if info.RelayFormat == types.RelayFormatOpenAI && !helper.StreamClientGone(c) {
 		if shouldSendLastResp {
 			_ = sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
 		}
 	}
 
-	if !containStreamUsage {
-		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		usage.CompletionTokens += toolCount * 7
+	info.StreamStatus.UsageEstimated = !inputReported || !outputReported
+	info.StreamStatus.CacheUsageKnown = cacheReported
+	if helper.StreamClientGone(c) {
+		if observedUsage != nil {
+			usage = observedUsage
+		}
+		if !inputReported {
+			usage.PromptTokens = info.GetEstimatePromptTokens()
+		}
+		if !outputReported {
+			estimate := service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, usage.PromptTokens)
+			usage.CompletionTokens = estimate.CompletionTokens + toolCount*7
+		}
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		if billing := usage.BillingUsage; billing != nil && billing.OpenAIUsage != nil {
+			snapshot := billing.OpenAIUsage
+			snapshot.PromptTokens, snapshot.InputTokens = usage.PromptTokens, usage.PromptTokens
+			snapshot.CompletionTokens, snapshot.OutputTokens = usage.CompletionTokens, usage.CompletionTokens
+			snapshot.TotalTokens = usage.TotalTokens
+			if cacheReported {
+				cached := usage.PromptTokensDetails.CachedTokens
+				snapshot.PromptCacheHitTokens = cached
+				snapshot.PromptTokensDetails.CachedTokens = cached
+				if snapshot.InputTokensDetails != nil {
+					snapshot.InputTokensDetails.CachedTokens = cached
+				}
+			}
+			billing.Estimated = billing.Estimated || info.StreamStatus.UsageEstimated
+		}
+	} else {
+		if !containStreamUsage {
+			usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+			usage.CompletionTokens += toolCount * 7
+		}
+		applyUsagePostProcessing(info, usage, common.StringToByteSlice(usageFrame))
 	}
-
-	applyUsagePostProcessing(info, usage, common.StringToByteSlice(usageFrame))
 
 	for _, name := range streamFunctionCallNames {
 		info.CountBillableToolCall(dto.BuildInCallFunctionCall, name)
 	}
 
-	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
-
+	if !helper.StreamClientGone(c) {
+		HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
+	}
 	return usage, nil
 }
 
 // observeStreamChoices collects billable function call names and records the
 // finish reason facts used by health sampling from one parsed chunk.
-func observeStreamChoices(info *relaycommon.RelayInfo, data string, seen map[string]struct{}, names *[]string) {
+func observeStreamChoices(info *relaycommon.RelayInfo, data string, seen map[string]struct{}, names *[]string) dto.ChatCompletionsStreamResponse {
 	var streamResponse dto.ChatCompletionsStreamResponse
 	if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
-		return
+		return dto.ChatCompletionsStreamResponse{}
 	}
 	for _, choice := range streamResponse.Choices {
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
@@ -248,6 +313,7 @@ func observeStreamChoices(info *relaycommon.RelayInfo, data string, seen map[str
 			*names = append(*names, name)
 		}
 	}
+	return streamResponse
 }
 
 func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {

@@ -24,7 +24,8 @@ const (
 // since a proxy may close the connection right after it is written.
 // Classification is independent of retries, channel disabling and billing.
 func ClassifyRelayOutcome(ctx context.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError) Outcome {
-	if info == nil || info.PerformanceBusinessRejection {
+	if info == nil || info.PerformanceBusinessRejection ||
+		(info.StreamStatus != nil && info.StreamStatus.ClientCancelled) {
 		return OutcomeIgnored
 	}
 	stream := info.StreamStatus.OutcomeSnapshot()

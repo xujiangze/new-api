@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/MoeForge/moego/regexp"
 	common2 "github.com/QuantumNous/new-api/common"
 	appconstant "github.com/QuantumNous/new-api/constant"
@@ -398,11 +400,71 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err = signUpstreamRequest(a, c, info, req.Method, req.URL, req.Header); err != nil {
 		return nil, err
 	}
+	if helper.IsTextStreamCancelCandidate(info, c.Request.URL.Path) && info.GetFinalRequestRelayFormat() == info.RelayFormat {
+		info.CancelUsageEligible = permitsCancelledTextUsage(req, info)
+	}
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}
 	return resp, nil
+}
+
+// Inspect the actual outbound shape: passthrough and parameter overrides can
+// request media even when the client's original parsed request did not.
+func permitsCancelledTextUsage(req *http.Request, info *common.RelayInfo) bool {
+	const maxInspectionBytes = 1 << 20
+	if req.GetBody == nil || req.ContentLength > maxInspectionBytes {
+		return false
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return false
+	}
+	defer body.Close()
+	payload, err := io.ReadAll(io.LimitReader(body, maxInspectionBytes+1))
+	if err != nil || len(payload) > maxInspectionBytes || !ojson.ValidBytes(payload) {
+		return false
+	}
+	request := ojson.ParseBytes(payload)
+	model := strings.ToLower(request.Get("model").Str)
+	if strings.Contains(model, "audio") || strings.Contains(model, "-tts") || strings.Contains(model, "-image") {
+		return false
+	}
+	for _, key := range []string{"audio", "imageConfig", "image_config", "extra_body", "generationConfig.imageConfig", "generation_config.image_config", "generationConfig.speechConfig", "generation_config.speech_config", "generationConfig.speech_config", "generation_config.speechConfig", "previous_response_id", "conversation"} {
+		if request.Get(key).Exists() {
+			return false
+		}
+	}
+	for _, key := range []string{"modalities", "generationConfig.responseModalities", "generationConfig.response_modalities", "generationConfig.response_modalities", "generation_config.responseModalities"} {
+		modalities := request.Get(key)
+		if modalities.Exists() && !modalities.IsArray() {
+			return false
+		}
+		for modality := range modalities.Values() {
+			if !strings.EqualFold(modality.Str, "text") {
+				return false
+			}
+		}
+	}
+	for tool := range request.Get("tools").Values() {
+		switch tool.Get("type").Str {
+		case "image_generation", "audio_generation":
+			return false
+		}
+	}
+	if info.RelayFormat == types.RelayFormatGemini {
+		info.GeminiTextCandidates = 1
+		for _, key := range []string{"generationConfig.candidateCount", "generationConfig.candidate_count", "generation_config.candidateCount", "generation_config.candidate_count"} {
+			if count := request.Get(key); count.Exists() {
+				if !helper.ReportedTokenCount(count) || count.Int() < 1 {
+					return false
+				}
+				info.GeminiTextCandidates = max(info.GeminiTextCandidates, int(count.Int()))
+			}
+		}
+	}
+	return true
 }
 
 func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
@@ -557,6 +619,10 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 
 	if info.IsStream {
 		helper.SetEventStreamHeaders(c)
+		if info.CancelUsageEligible {
+			stop := helper.WatchStreamDisconnect(c)
+			defer stop()
+		}
 		// 处理流式请求的 ping 保活
 		generalSettings := operation_setting.GetGeneralSetting()
 		if generalSettings.PingIntervalEnabled && !info.DisablePing {
@@ -567,7 +633,39 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 
 	common2.SetContextKey(c, appconstant.ContextKeyUpstreamRequestOrigin, req.URL.Scheme+"://"+req.URL.Host)
+	var cancelUpstream context.CancelFunc
+	var stopBeforeHeaders func() bool
+	if info.CancelUsageEligible {
+		client := c.Request.Context()
+		if err := client.Err(); err != nil {
+			if req.Body != nil {
+				_ = req.Body.Close()
+			}
+			return nil, err
+		}
+		// A client that leaves before headers must not leave an unbounded
+		// upstream wait. After headers the native scanner owns cancellation.
+		var upstream context.Context
+		upstream, cancelUpstream = context.WithCancel(req.Context())
+		stopBeforeHeaders = context.AfterFunc(client, cancelUpstream)
+		req = req.WithContext(upstream)
+	}
 	resp, err := relayClient.Do(req)
+	if cancelUpstream != nil {
+		if err != nil || resp == nil || resp.Body == nil {
+			stopBeforeHeaders()
+			cancelUpstream()
+		} else {
+			if helper.IsSuccessfulEventStream(resp) {
+				// The scanner now owns the lifetime of this upstream stream.
+				stopBeforeHeaders()
+			}
+			resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: func() {
+				stopBeforeHeaders()
+				cancelUpstream()
+			}}
+		}
+	}
 	if err != nil {
 		// A url.Error quotes the request URL, whose query may carry a
 		// credential: log its operation, the host and the cause only.
@@ -601,6 +699,16 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	// make the transport drop the connection that carries the response.
 	_ = c.Request.Body.Close()
 	return resp, nil
+}
+
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	b.cancel()
+	return b.ReadCloser.Close()
 }
 
 func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {

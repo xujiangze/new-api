@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -100,16 +101,44 @@ func (b *StreamWriteBudget) Deadline(now time.Time, n int) time.Time {
 type streamResponseWriter struct {
 	gin.ResponseWriter
 	budget StreamWriteBudget
+
+	deadlineMu        sync.Mutex
+	client            context.Context
+	writeDeadline     time.Time
+	cancelledAt       time.Time
+	localWriteTimeout atomic.Bool
+	writeTimedOut     chan struct{}
+	confirmedFlush    bool
+	terminalDelivered bool
+}
+
+func (w *streamResponseWriter) prepareWrite(n int) error {
+	w.deadlineMu.Lock()
+	defer w.deadlineMu.Unlock()
+	if w.client != nil && w.client.Err() != nil {
+		return w.client.Err()
+	}
+	w.writeDeadline = w.budget.Deadline(time.Now(), n)
+	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(w.writeDeadline)
+	return nil
 }
 
 func (w *streamResponseWriter) Write(p []byte) (int, error) {
-	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(w.budget.Deadline(time.Now(), len(p)))
-	return w.ResponseWriter.Write(p)
+	if err := w.prepareWrite(len(p)); err != nil {
+		return 0, err
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.noteWriteError(err)
+	return n, err
 }
 
 func (w *streamResponseWriter) WriteString(s string) (int, error) {
-	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(w.budget.Deadline(time.Now(), len(s)))
-	return w.ResponseWriter.WriteString(s)
+	if err := w.prepareWrite(len(s)); err != nil {
+		return 0, err
+	}
+	n, err := w.ResponseWriter.WriteString(s)
+	w.noteWriteError(err)
+	return n, err
 }
 
 // Unwrap lets http.ResponseController reach the connection.
@@ -127,6 +156,13 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	// subsequent ping and data writes through its shared write mutex.
 	if writer := keepAliveWriter(c); writer != nil {
 		writer.stop()
+	}
+	tracksCancelledUsage := TracksCancelledUsage(c)
+	client := c.Request.Context()
+	var cancelAdmission chan struct{}
+	var cancelDeadline time.Time
+	if tracksCancelledUsage {
+		cancelAdmission = make(chan struct{})
 	}
 
 	// 无条件新建 StreamStatus
@@ -217,13 +253,15 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			for {
 				select {
 				case <-pingTicker.C:
-					var err error
-					func() {
+					err := func() error {
 						writeMutex.Lock()
 						defer writeMutex.Unlock()
-						err = PingData(c)
+						return PingData(c)
 					}()
 					if err != nil {
+						if StreamClientGone(c) {
+							return
+						}
 						logger.LogError(c, common.LogText("ping data error: %s", err.Error()))
 						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, err)
 						return
@@ -279,13 +317,31 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				logger.LogError(c, common.LogText("scanner goroutine panic: %v", r))
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPanic, fmt.Errorf("scanner panic: %v", r))
 			}
-			stop()
+			// For cancellation accounting, let the consumer parse the buffered
+			// tail before leaving its deadline and releasing its slot.
+			if !tracksCancelledUsage {
+				stop()
+			}
 			logger.LogDebug(c, "scanner goroutine exited")
 			wg.Done()
 		}()
 
+		// A read already in flight may return after disconnect. Accept its
+		// frame only after admission, and never after the absolute deadline.
 		for scanner.Scan() {
-			// 检查是否需要停止
+			if cancelAdmission != nil && client.Err() == context.Canceled {
+				select {
+				case <-cancelAdmission:
+					if !time.Now().Before(cancelDeadline) {
+						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+						return
+					}
+				case <-ctx.Done():
+					return
+				case <-stopChan:
+					return
+				}
+			}
 			select {
 			case <-stopChan:
 				return
@@ -338,16 +394,41 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
 	})
 
-	// 主循环等待完成或超时
 	select {
 	case <-ticker.C:
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
 	case <-stopChan:
-		// EndReason already set by the goroutine that triggered stopChan
-	case <-c.Request.Context().Done():
-		// 客户端断开：立即 cleanup 关闭上游 resp.Body，解除 scanner 阻塞并让上游停止生成，
-		// 避免为已放弃的请求继续消费上游 token。
-		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
+		// EndReason already set by the goroutine that triggered stopChan.
+	case <-client.Done():
+		if !tracksCancelledUsage || client.Err() != context.Canceled || constant.RelayCancelUsageTimeout == 0 {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, client.Err())
+			break
+		}
+		writer := findStreamResponseWriter(c.Writer)
+		cancelledAt, writeTimedOut := writer.interruptWrites()
+		if writeTimedOut {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+			break
+		}
+		select {
+		case cancelledUsageSlots <- struct{}{}:
+			defer func() { <-cancelledUsageSlots }()
+			cancelDeadline = cancelledAt.Add(time.Duration(constant.RelayCancelUsageTimeout) * time.Second)
+			close(cancelAdmission)
+			timer := time.NewTimer(time.Until(cancelDeadline))
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+			case <-ticker.C:
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+			case <-writer.writeTimedOut:
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+			case <-stopChan:
+			}
+		default:
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, client.Err())
+		}
 	}
 
 	cleanup()

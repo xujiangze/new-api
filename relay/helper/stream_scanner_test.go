@@ -724,3 +724,114 @@ func TestSetEventStreamHeadersBoundsStreamWritesByBudget(t *testing.T) {
 	assert.False(t, recorder.deadlines[0].Before(before.Add(streamWriteTimeout+450*time.Second)))
 	assert.Contains(t, recorder.Body.String(), "data: AAAA")
 }
+
+type blockedStreamWriter struct {
+	*httptest.ResponseRecorder
+	entered, interrupted chan struct{}
+	once                 sync.Once
+	writes               atomic.Int32
+}
+
+func (w *blockedStreamWriter) Write(p []byte) (int, error) {
+	if w.writes.Add(1) == 1 {
+		close(w.entered)
+	}
+	<-w.interrupted
+	return 0, context.Canceled
+}
+
+func (w *blockedStreamWriter) SetWriteDeadline(deadline time.Time) error {
+	if deadline.Before(time.Now()) {
+		w.once.Do(func() { close(w.interrupted) })
+	}
+	return nil
+}
+
+func TestCancelledUsageInterruptsBlockedWriterAndDropsDownstreamTail(t *testing.T) {
+	previousTimeout, previousStreaming := constant.RelayCancelUsageTimeout, constant.StreamingTimeout
+	constant.RelayCancelUsageTimeout, constant.StreamingTimeout = 15, 3
+	t.Cleanup(func() {
+		constant.RelayCancelUsageTimeout, constant.StreamingTimeout = previousTimeout, previousStreaming
+	})
+	recorder := &blockedStreamWriter{ResponseRecorder: httptest.NewRecorder(), entered: make(chan struct{}), interrupted: make(chan struct{})}
+	defer recorder.once.Do(func() { close(recorder.interrupted) })
+	c, _ := gin.CreateTestContext(recorder)
+	client, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(client)
+	info := &relaycommon.RelayInfo{IsStream: true, CancelUsageEligible: true, DisablePing: true}
+	body, upstream := io.Pipe()
+	defer upstream.Close()
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}
+	seen := make(chan string, 2)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		defer StartCancelledUsage(c, info, resp)()
+		StreamScannerHandler(c, resp, info, func(data string, _ *StreamResult) {
+			seen <- data
+			_ = StringData(c, data)
+		})
+	}()
+	_, err := io.WriteString(upstream, "data: first\n\n")
+	require.NoError(t, err)
+	select {
+	case <-recorder.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first write did not reach the transport")
+	}
+	cancel()
+	select {
+	case <-recorder.interrupted:
+	case <-time.After(time.Second):
+		t.Fatal("blocked transport write did not receive the cancellation deadline")
+	}
+	_, err = io.WriteString(upstream, "data: final usage\n\ndata: [DONE]\n\n")
+	require.NoError(t, err)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("tail did not finish the scanner")
+	}
+	assert.Equal(t, "first", <-seen)
+	require.NotEmpty(t, seen)
+	assert.Equal(t, "final usage", <-seen)
+	assert.True(t, info.StreamStatus.ClientCancelled)
+	assert.Equal(t, int32(1), recorder.writes.Load())
+}
+
+func TestCancelledUsageDoesNotWaitForASlot(t *testing.T) {
+	previousTimeout, previousStreaming := constant.RelayCancelUsageTimeout, constant.StreamingTimeout
+	constant.RelayCancelUsageTimeout, constant.StreamingTimeout = 15, 3
+	t.Cleanup(func() {
+		constant.RelayCancelUsageTimeout, constant.StreamingTimeout = previousTimeout, previousStreaming
+	})
+	for range cap(cancelledUsageSlots) {
+		cancelledUsageSlots <- struct{}{}
+		defer func() { <-cancelledUsageSlots }()
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	client, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(client)
+	info := &relaycommon.RelayInfo{IsStream: true, CancelUsageEligible: true, DisablePing: true}
+	body, upstream := io.Pipe()
+	defer upstream.Close()
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		defer StartCancelledUsage(c, info, resp)()
+		StreamScannerHandler(c, resp, info, func(string, *StreamResult) {})
+	}()
+	cancel()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled stream waited for an admission slot")
+	}
+	assert.True(t, info.StreamStatus.ClientCancelled)
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
+	_, err := io.WriteString(upstream, "data: late\n\n")
+	assert.ErrorIs(t, err, io.ErrClosedPipe)
+}

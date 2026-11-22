@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -73,8 +74,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	defer service.CloseResponseBodyGracefully(resp)
+	defer helper.StartCancelledUsage(c, info, resp)()
 
 	accumulator := service.NewResponsesUsageAccumulator(info)
+	var inputReported, outputReported, cacheReported bool
+	trackCancel := helper.TracksCancelledUsage(c)
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -89,19 +93,37 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			data = string(rewriteSGLangResponsesCreatedAt(info, []byte(data), "response.created_at", streamResponse.Response.CreatedAt))
 		}
 		accumulator.Observe(&streamResponse, common.StringToByteSlice(data))
-		if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
-			sr.Stop(err)
-			return
+		completed := (streamResponse.Type == "response.completed" || streamResponse.Type == "response.done") &&
+			streamResponse.Response != nil && info.StreamStatus.ResponseOutcome() == string(relaycommon.ResponseOutcomeCompleted)
+		terminal := completed || streamResponse.Type == "response.done" && streamResponse.Response != nil && info.StreamStatus.ResponseOutcome() != "" ||
+			slices.Contains([]string{"response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error", "response.error"}, streamResponse.Type)
+		if trackCancel && terminal {
+			wireUsage := ojson.Get(data, "response.usage")
+			inputReported = helper.ReportedTokenCount(wireUsage.Get("input_tokens"))
+			outputReported = helper.ReportedTokenCount(wireUsage.Get("output_tokens"))
+			cacheReported = helper.ReportedTokenCount(wireUsage.Get("input_tokens_details.cached_tokens"))
 		}
-		if (streamResponse.Type == "response.completed" || streamResponse.Type == "response.done") &&
-			streamResponse.Response != nil && info.StreamStatus.ResponseOutcome() == string(relaycommon.ResponseOutcomeCompleted) {
+		if !helper.StreamClientGone(c) {
+			err := helper.ResponseChunkData(c, streamResponse, data)
+			if err != nil && !helper.StreamClientGone(c) {
+				sr.Stop(err)
+				return
+			}
+			if err == nil && terminal {
+				helper.MarkStreamTerminalDelivered(c)
+			}
+		}
+		if completed || terminal && helper.StreamClientGone(c) {
 			sr.Done()
 		}
 	})
 
 	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
 	info.StreamStatus.RequireTerminal()
-	return accumulator.Finish(), nil
+	usage := accumulator.Finish()
+	info.StreamStatus.UsageEstimated = !inputReported || !outputReported
+	info.StreamStatus.CacheUsageKnown = cacheReported || usage.PromptTokensDetails.CachedTokens > 0
+	return usage, nil
 }
 
 func rewriteSGLangResponsesCreatedAt(info *relaycommon.RelayInfo, payload []byte, path string, createdAt dto.IntValue) []byte {

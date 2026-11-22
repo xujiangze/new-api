@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
@@ -124,7 +125,13 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			}
 		}
 		countClaudeStreamBillableTools(info, &claudeResponse)
-		helper.ClaudeChunkData(c, claudeResponse, data)
+		if helper.TracksCancelledUsage(c) {
+			if !helper.StreamClientGone(c) && helper.StreamEventData(c, claudeResponse.Type, data+"\n") == nil && claudeResponse.Type == "message_stop" {
+				helper.MarkStreamTerminalDelivered(c)
+			}
+		} else {
+			helper.ClaudeChunkData(c, claudeResponse, data)
+		}
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		state, err := claudeToChatStreamState(info)
 		if err != nil {
@@ -339,19 +346,43 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		ResponseText: strings.Builder{},
 		Usage:        &dto.Usage{},
 	}
+	if info.RelayFormat == types.RelayFormatClaude {
+		defer helper.StartCancelledUsage(c, info, resp)()
+	}
+	trackCancel := helper.TracksCancelledUsage(c)
 	var err *types.NewAPIError
+	var cacheReported, outputReported bool
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		err = HandleStreamResponseData(c, info, claudeInfo, data)
 		if err != nil {
 			sr.Stop(err)
+			return
+		}
+		if !trackCancel {
+			return
+		}
+		event := ojson.Parse(data)
+		switch event.Get("type").Str {
+		case "message_start":
+			cacheReported = helper.ReportedTokenCount(event.Get("message.usage.cache_read_input_tokens"))
+		case "message_delta":
+			cacheReported = cacheReported || helper.ReportedTokenCount(event.Get("usage.cache_read_input_tokens"))
+			outputReported = outputReported || helper.ReportedTokenCount(event.Get("usage.output_tokens"))
+		case "message_stop":
+			if helper.StreamClientGone(c) {
+				sr.Done()
+			}
 		}
 	})
 	info.StreamStatus.RequireTerminal()
-	if err != nil {
+	if err != nil && !helper.StreamClientGone(c) {
 		return nil, err
 	}
 
+	inputMissing := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage).PromptTokens == 0
 	HandleStreamFinalResponse(c, info, claudeInfo)
+	info.StreamStatus.UsageEstimated = inputMissing || !outputReported
+	info.StreamStatus.CacheUsageKnown = cacheReported || claudeInfo.Usage.PromptTokensDetails.CachedTokens > 0
 	return claudeInfo.Usage, nil
 }
 

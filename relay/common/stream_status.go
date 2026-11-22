@@ -45,6 +45,12 @@ type StreamStatus struct {
 	EndError  error
 	endOnce   sync.Once
 
+	// These describe what reached the downstream and what we can bill, not
+	// whether the upstream eventually finished.
+	ClientCancelled bool
+	UsageEstimated  bool
+	CacheUsageKnown bool
+
 	mu         sync.Mutex
 	Errors     []StreamErrorEntry
 	ErrorCount int

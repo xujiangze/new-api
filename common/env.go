@@ -3,6 +3,8 @@ package common
 import (
 	"os"
 	"strconv"
+
+	"github.com/QuantumNous/new-api/constant"
 )
 
 func GetEnvOrDefault(env string, defaultValue int) int {
@@ -15,6 +17,18 @@ func GetEnvOrDefault(env string, defaultValue int) int {
 		return defaultValue
 	}
 	return num
+}
+
+// RelayCancelUsageTimeoutFromEnv reads the validated wait in seconds without
+// changing the running server's configuration.
+func RelayCancelUsageTimeoutFromEnv() int {
+	const name = "RELAY_CANCEL_USAGE_TIMEOUT"
+	seconds := GetEnvOrDefault(name, constant.DefaultRelayCancelUsageTimeout)
+	if seconds < 0 || seconds > constant.MaxRelayCancelUsageTimeout {
+		SysError(LogText("%s must be between 0 and %d, using default value: %d", name, constant.MaxRelayCancelUsageTimeout, constant.DefaultRelayCancelUsageTimeout))
+		return constant.DefaultRelayCancelUsageTimeout
+	}
+	return seconds
 }
 
 func GetEnvOrDefaultString(env string, defaultValue string) string {

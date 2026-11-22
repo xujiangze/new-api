@@ -1,9 +1,11 @@
 package openai
 
 import (
+	"github.com/MoeForge/moego/ojson"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 )
 
@@ -48,6 +50,32 @@ func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, res
 			}
 		}
 	}
+}
+
+func reportedStreamCacheTokens(info *relaycommon.RelayInfo, wireUsage ojson.Result, data string, usage *dto.Usage) (int, bool) {
+	if count := wireUsage.Get("prompt_tokens_details.cached_tokens"); helper.ReportedTokenCount(count) {
+		return int(count.Int()), true
+	}
+	if usage.PromptTokensDetails.CachedTokens > 0 {
+		return usage.PromptTokensDetails.CachedTokens, true
+	}
+	var paths []string
+	switch info.ChannelType {
+	case constant.ChannelTypeDeepSeek:
+		paths = []string{"prompt_cache_hit_tokens"}
+	case constant.ChannelTypeZhipu_v4, constant.ChannelTypeMoonshot:
+		paths = []string{"input_tokens_details.cached_tokens", "cached_tokens", "prompt_cache_hit_tokens"}
+	case constant.ChannelTypeOpenAI:
+		if count := ojson.Get(data, "timings.cache_n"); helper.ReportedTokenCount(count) {
+			return int(count.Int()), true
+		}
+	}
+	for _, path := range paths {
+		if count := wireUsage.Get(path); helper.ReportedTokenCount(count) {
+			return int(count.Int()), true
+		}
+	}
+	return 0, false
 }
 
 func extractCachedTokensFromBody(body []byte) (int, bool) {

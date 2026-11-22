@@ -113,7 +113,11 @@ func Reply(c *gin.Context, format types.RelayFormat, info *relaycommon.RelayInfo
 	// client that went away, and the upstream request is canceled.
 	c.Request = c.Request.WithContext(ctx)
 	c.Writer = writer
-	return writer.finish
+	info.ReplyCheckActive = true
+	return func() {
+		writer.finish()
+		info.ReplyCheckActive = false
+	}
 }
 
 // replyTarget is one instance of a reply check and what it did over the whole

@@ -208,6 +208,10 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	var streamErr error
 	var accumulatedUsageMetadata *dto.GeminiUsageMetadata
 	var grounding geminiGroundingCounter
+	var inputReported, cacheReported, outputReported bool
+	trackCancel := helper.TracksCancelledUsage(c)
+	finishedCandidates := make(map[int64]struct{})
+	candidateCount := max(1, info.GeminiTextCandidates)
 	responseText := strings.Builder{}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
@@ -223,6 +227,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
 		}
 		info.ObserveResponseModel(ojson.Get(data, "modelVersion").Str)
+		var candidateFinished bool
 		for _, candidate := range geminiResponse.Candidates {
 			if candidate.FinishReason == nil || *candidate.FinishReason == "" || *candidate.FinishReason == "FINISH_REASON_UNSPECIFIED" {
 				continue
@@ -231,6 +236,15 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION":
 				info.PerformanceBusinessRejection = true
 			}
+			if !trackCancel {
+				info.StreamStatus.MarkCompleted()
+			} else if candidate.Index >= 0 && candidate.Index < int64(candidateCount) {
+				candidateFinished = true
+				finishedCandidates[candidate.Index] = struct{}{}
+			}
+		}
+		terminal := candidateFinished && len(finishedCandidates) == candidateCount
+		if terminal {
 			info.StreamStatus.MarkCompleted()
 		}
 
@@ -257,13 +271,38 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			hasBillableUsageMetadata = true
 		}
 
+		var completeUsage bool
+		if trackCancel {
+			wireUsage := ojson.Get(data, "usageMetadata")
+			cacheReported = cacheReported || helper.ReportedTokenCount(wireUsage.Get("cachedContentTokenCount"))
+			frameInputReported := helper.ReportedTokenCount(wireUsage.Get("promptTokenCount"))
+			frameOutputReported := helper.ReportedTokenCount(wireUsage.Get("candidatesTokenCount"))
+			inputReported = inputReported || frameInputReported
+			outputReported = outputReported || frameOutputReported
+			completeUsage = frameOutputReported && frameInputReported
+		}
+		if helper.StreamClientGone(c) {
+			// Some servers send usage in its own chunk after the finish reason.
+			// An earlier partial snapshot cannot close out that terminal chunk.
+			if completeUsage && info.StreamStatus.ResponseOutcome() == string(relaycommon.ResponseOutcomeCompleted) {
+				sr.Done()
+			}
+			return
+		}
 		if !callback(data, &geminiResponse) {
+			if helper.StreamClientGone(c) {
+				return
+			}
 			if isGeminiDownstreamStop(c, info) {
 				sr.Stop(nil)
 				return
 			}
 			streamErr = errors.New("Gemini stream callback stopped")
 			sr.Stop(streamErr)
+			return
+		}
+		if terminal {
+			helper.MarkStreamTerminalDelivered(c)
 		}
 	})
 	info.StreamStatus.RequireTerminal()
@@ -284,7 +323,19 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		patchGeminiZeroCompletionUsage(c, info, usage, responseText.String(), imageCount)
 	}
 
-	if streamErr != nil {
+	if info.StreamStatus != nil && trackCancel {
+		info.StreamStatus.UsageEstimated = !inputReported || !outputReported || usage.BillingUsage != nil && usage.BillingUsage.Estimated
+		info.StreamStatus.CacheUsageKnown = cacheReported || usage.PromptTokensDetails.CachedTokens > 0
+		if helper.StreamClientGone(c) && !inputReported && hasBillableUsageMetadata && usage.BillingUsage != nil {
+			billing := usage.BillingUsage
+			if metadata := billing.GeminiUsageMetadata; metadata != nil && metadata.PromptTokenCount == 0 {
+				metadata.PromptTokenCount = info.GetEstimatePromptTokens()
+				metadata.TotalTokenCount = metadata.PromptTokenCount + metadata.ToolUsePromptTokenCount + metadata.CandidatesTokenCount + metadata.ThoughtsTokenCount
+				billing.Estimated = true
+			}
+		}
+	}
+	if streamErr != nil && !helper.StreamClientGone(c) {
 		return usage, types.NewOpenAIError(streamErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if info.StreamStatus != nil && !info.StreamStatus.IsNormalEnd() {

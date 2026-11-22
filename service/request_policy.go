@@ -153,9 +153,11 @@ func MarkRequestPolicySuccess(c *gin.Context, stream *relaycommon.StreamStatus) 
 		return
 	}
 	state.OutcomeRecorded = true
-	state.Successful = stream == nil || stream.IsNormalEnd() && !stream.HasErrors() && (stream.ResponseOutcome() == "" || stream.ResponseOutcome() == "completed")
+	state.Successful = stream == nil || !stream.ClientCancelled && stream.IsNormalEnd() && !stream.HasErrors() && (stream.ResponseOutcome() == "" || stream.ResponseOutcome() == "completed")
 	decision := PolicyDecision{Action: "success", Reason: "request_completed", Source: "upstream"}
-	if !state.Successful {
+	if stream != nil && stream.ClientCancelled {
+		decision = PolicyDecision{Action: "stop", Reason: "client_gone", Source: "system"}
+	} else if !state.Successful {
 		decision = PolicyDecision{Action: "stop", Reason: "stream_not_successful", Source: "system"}
 	}
 	channelID := 0

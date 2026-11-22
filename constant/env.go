@@ -1,6 +1,14 @@
 package constant
 
 var StreamingTimeout int
+
+const (
+	DefaultRelayCancelUsageTimeout = 15
+	MaxRelayCancelUsageTimeout     = 60
+)
+
+// RelayCancelUsageTimeout bounds text SSE usage collection after a downstream disconnect, in seconds.
+var RelayCancelUsageTimeout = DefaultRelayCancelUsageTimeout
 var DifyDebug bool
 var MaxFileDownloadMB int
 var StreamScannerMaxBufferMB int

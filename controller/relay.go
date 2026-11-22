@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -73,6 +74,7 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
+	clientContext := c.Request.Context()
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
@@ -102,6 +104,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	defer func() {
 		if newAPIError != nil {
+			if relayInfo != nil && helper.IsTextStreamCancelCandidate(relayInfo, c.Request.URL.Path) && clientContext.Err() == context.Canceled {
+				return
+			}
 			service.RecordRequestPolicyTermination(c, newAPIError)
 			logger.LogError(c, common.LogText("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
@@ -162,6 +167,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 	relayInfo.SetRequestPluginIngress(ingressSteps, ingressRecord)
+	textStream := helper.IsTextStreamCancelCandidate(relayInfo, c.Request.URL.Path)
+	if textStream && clientContext.Err() == context.Canceled {
+		return
+	}
 
 	defer func() {
 		recovered := recover()
@@ -201,6 +210,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.LastError = nil
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+		if textStream && clientContext.Err() == context.Canceled {
+			newAPIError = types.NewError(clientContext.Err(), types.ErrorCodeDoRequestFailed, types.ErrOptionWithSkipRetry())
+			break
+		}
 		relayInfo.StreamStatus = nil
 		relayInfo.PerformanceBusinessRejection = false
 		relayInfo.PerformanceOutputTokens = 0
@@ -250,6 +263,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			return
 		}
 
+		if textStream && clientContext.Err() == context.Canceled {
+			// A disconnect stops retries, not the accounting of an already
+			// observed upstream rejection.
+			relayInfo.LastError = newAPIError
+			break
+		}
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 

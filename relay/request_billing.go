@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"context"
+	"errors"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
@@ -63,6 +65,8 @@ func RefundFailedRequestBilling(c *gin.Context, info *relaycommon.RelayInfo, api
 	if info.Billing != nil {
 		info.Billing.Refund(c)
 	}
-	service.ChargeViolationFeeIfNeeded(c, info, apiErr)
+	if !errors.Is(apiErr, context.Canceled) {
+		service.ChargeViolationFeeIfNeeded(c, info, apiErr)
+	}
 	return apiErr
 }

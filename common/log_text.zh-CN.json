@@ -2,6 +2,7 @@
   "%d quota points": "%d 点额度",
   "%s after refresh: %s": "%s（刷新凭证后重试）: %s",
   "%s failed: %s": "%s 构建失败，%s",
+  "%s must be between 0 and %d, using default value: %d": "%s 必须介于 0 和 %d 之间，已使用默认值: %d",
   "%s must be positive, using default value: %d": "%s 必须大于 0，已使用默认值: %d",
   "%s must be positive; using default": "%s 必须大于 0，已使用默认值",
   "%s%.6f quota": "%s%.6f 额度",

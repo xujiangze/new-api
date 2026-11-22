@@ -398,6 +398,15 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 }
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []*common.Message) {
+	if stream := relayInfo.StreamStatus; stream != nil && stream.ClientCancelled {
+		extraContent = append(extraContent, common.NewMessage("User canceled"))
+		if stream.UsageEstimated {
+			extraContent = append(extraContent, common.NewMessage("Usage was estimated"))
+		}
+		if !stream.CacheUsageKnown {
+			extraContent = append(extraContent, common.NewMessage("Cache usage is unknown"))
+		}
+	}
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
 	if usage == nil {

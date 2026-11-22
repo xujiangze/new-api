@@ -5,6 +5,8 @@ on:
     branches:
       - xjz-main
       - xjz-dev
+    tags:
+      - "v*-xjz.*"
   workflow_dispatch:
     inputs:
       ref:

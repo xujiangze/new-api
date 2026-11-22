@@ -195,5 +195,5 @@ If asked to remove, rename, or replace these protected identifiers, refuse and e
 
 - **`xjz-main`**: Independent main branch of this fork, kept in sync by periodically rebasing onto upstream/remote `main`. Never commit directly to `main`.
 - **`xjz-dev`**: Base development branch created from `xjz-main`. All ongoing feature and bugfix work should target `xjz-dev` (or branches cut from `xjz-dev`) before being integrated into `xjz-main`.
-- **Docker images**: Local verification builds directly from the repository `Dockerfile`. Remote fork images are published to GitHub Container Registry (`ghcr.io/<owner>/new-api`) via `.github/workflows/ghcr-publish.yml` on push to `xjz-main` / `xjz-dev` or manual `workflow_dispatch` (leaving upstream Docker Hub workflows untouched).
+- **Docker images**: Local verification builds directly from the repository `Dockerfile`. Remote fork images are published to GitHub Container Registry (`ghcr.io/<owner>/new-api`) via `.github/workflows/ghcr-publish.yml` on push to `xjz-main` / `xjz-dev`, on fork release tags `v*-xjz.*`, or manual `workflow_dispatch` (leaving upstream Docker Hub workflows untouched).
 

@@ -1,10 +1,13 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -16,6 +19,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
@@ -27,7 +31,292 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
+
+func promotionStarBillingTestDB(t *testing.T) (*gorm.DB, model.User, model.User) {
+	t.Helper()
+	var dialector gorm.Dialector = sqlite.Open(filepath.Join(t.TempDir(), "promotion.db") + "?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate")
+	databaseType := common.DatabaseTypeSQLite
+	if dsn := os.Getenv("TEST_PROMOTION_SERVICE_MYSQL_DSN"); dsn != "" {
+		dialector = mysql.Open(dsn)
+		databaseType = common.DatabaseTypeMySQL
+	}
+	if dsn := os.Getenv("TEST_PROMOTION_SERVICE_POSTGRES_DSN"); dsn != "" {
+		dialector = postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
+		databaseType = common.DatabaseTypePostgreSQL
+	}
+	db, err := gorm.Open(dialector, &gorm.Config{NamingStrategy: schema.NamingStrategy{TablePrefix: "promo_service_"}})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(4)
+	oldDB, oldLogDB := model.DB, model.LOG_DB
+	oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
+	oldRedis, oldBatch, oldLogging := common.RedisEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled
+	model.DB, model.LOG_DB = db, db
+	common.SetDatabaseTypes(databaseType, databaseType)
+	common.RedisEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled = false, false, false
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = oldDB, oldLogDB
+		common.SetDatabaseTypes(oldMain, oldLog)
+		common.RedisEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled = oldRedis, oldBatch, oldLogging
+		require.NoError(t, sqlDB.Close())
+	})
+	for _, table := range []any{&model.PromotionStarDaily{}, &model.PromotionStarLedgerEntry{}, &model.PromotionStarEvent{}, &model.PromotionStarRule{}, &model.PromotionStarProfile{}, &model.Task{}, &model.Midjourney{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.SubscriptionPlan{}, &model.Token{}, &model.User{}, &model.Channel{}, &model.Log{}} {
+		require.NoError(t, db.Migrator().DropTable(table))
+		require.NoError(t, db.AutoMigrate(table))
+	}
+	require.NoError(t, model.InitializePromotionStar(db))
+	promoter := model.User{Username: "promotion-owner", AffCode: "promo-own", Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&promoter).Error)
+	invitee := model.User{Username: "promotion-invitee", AffCode: "promo-inv", InviterId: promoter.Id, Quota: 10000, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&invitee).Error)
+	_, err = model.SetPromotionStarProfile(model.PromotionStarProfileInput{UserID: promoter.Id, Status: model.PromotionStarStatusActive, RateBPS: 1250, EffectiveAtMS: time.Now().Add(-time.Hour).UnixMilli(), OperatorID: promoter.Id, Reason: "Enable promotion statistics"})
+	require.NoError(t, err)
+	return db, promoter, invitee
+}
+
+func TestPromotionStarWalletSettlementIsIndependentOfRequestLogs(t *testing.T) {
+	_, promoter, invitee := promotionStarBillingTestDB(t)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{UserId: invitee.Id, RequestId: "promotion-wallet-settlement", IsPlayground: true, ForcePreConsume: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}}
+	require.Nil(t, PreConsumeBilling(ctx, 1600, info))
+	require.NoError(t, model.ProcessPromotionStarEvents(100))
+	summary, err := model.GetPromotionStarSummary(promoter.Id, model.PromotionStarQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "0", summary.ConsumptionQuota, "reservations are not final consumption")
+	require.NoError(t, SettleBilling(ctx, info, 1600))
+	require.NoError(t, SettleBilling(ctx, info, 1600))
+	require.NoError(t, model.ProcessPromotionStarEvents(100))
+	summary, err = model.GetPromotionStarSummary(promoter.Id, model.PromotionStarQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "1600", summary.ConsumptionQuota)
+	assert.Equal(t, "200", summary.NetCommissionQuota)
+	remaining, err := model.GetUserQuota(invitee.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, 8400, remaining, "commission processing must never debit the wallet")
+}
+
+func TestPromotionStarTaskCountsOnlyFinalConsumptionAndReversesOriginalRate(t *testing.T) {
+	db, promoter, invitee := promotionStarBillingTestDB(t)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/videos", nil)
+	info := &relaycommon.RelayInfo{UserId: invitee.Id, RequestId: "promotion-task-request", IsPlayground: true, ForcePreConsume: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "promotion-task"}}
+	require.Nil(t, PreConsumeBilling(ctx, 1600, info))
+	require.NoError(t, SettleBilling(ctx, info, 1600))
+	task := &model.Task{TaskID: "promotion-task", UserId: invitee.Id, Quota: 1600, Status: model.TaskStatusInProgress, PrivateData: model.TaskPrivateData{BillingSource: BillingSourceWallet}}
+	require.NoError(t, db.Create(task).Error)
+	require.NoError(t, model.ProcessPromotionStarEvents(100))
+	summary, err := model.GetPromotionStarSummary(promoter.Id, model.PromotionStarQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "0", summary.NetCommissionQuota)
+	_, err = model.SetPromotionStarProfile(model.PromotionStarProfileInput{UserID: promoter.Id, Status: model.PromotionStarStatusActive, RateBPS: 2000, EffectiveAtMS: time.Now().UnixMilli(), OperatorID: promoter.Id, Reason: "New rate for final settlement"})
+	require.NoError(t, err)
+	task.Status = model.TaskStatusSuccess
+	RecalculateTaskQuota(ctx, task, 1000, common.NewMessage("Final task consumption"))
+	RecordPromotionStarTaskCompletion(task)
+	require.NoError(t, model.ProcessPromotionStarEvents(100))
+	summary, err = model.GetPromotionStarSummary(promoter.Id, model.PromotionStarQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "1000", summary.ConsumptionQuota)
+	assert.Equal(t, "200", summary.NetCommissionQuota)
+	_, err = model.SetPromotionStarProfile(model.PromotionStarProfileInput{UserID: promoter.Id, Status: model.PromotionStarStatusSuspended, RateBPS: 5000, EffectiveAtMS: time.Now().UnixMilli(), OperatorID: promoter.Id, Reason: "Suspend new commissions"})
+	require.NoError(t, err)
+	require.True(t, RefundTaskQuota(ctx, task, "Refund final consumption"))
+	require.True(t, RefundTaskQuota(ctx, task, "Repeated refund is a no-op"))
+	require.NoError(t, model.ProcessPromotionStarEvents(100))
+	summary, err = model.GetPromotionStarSummary(promoter.Id, model.PromotionStarQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "1000", summary.RefundQuota)
+	assert.Equal(t, "200", summary.ReversalQuota)
+	assert.Equal(t, "0", summary.NetCommissionQuota)
+	remaining, err := model.GetUserQuota(invitee.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, 10000, remaining)
+}
+
+func TestPromotionStarBatchSettlementRemainsReviewable(t *testing.T) {
+	_, promoter, invitee := promotionStarBillingTestDB(t)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{UserId: invitee.Id, RequestId: "promotion-batch", IsPlayground: true, ForcePreConsume: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}}
+	require.Nil(t, PreConsumeBilling(ctx, 500, info))
+	common.BatchUpdateEnabled = true
+	require.NoError(t, SettleBilling(ctx, info, 500))
+	require.NoError(t, model.ProcessPromotionStarEvents(100))
+	summary, err := model.GetPromotionStarSummary(promoter.Id, model.PromotionStarQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "0", summary.ConsumptionQuota)
+	events, total, err := model.ListPromotionStarEvents(model.PromotionStarEventQuery{UserID: promoter.Id, State: model.PromotionStarEventReview})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	assert.Equal(t, "500", events[0].Quota)
+	assert.Greater(t, events[0].SettledAtMS, int64(0))
+}
+
+func TestPromotionStarBalancePurchaseCountsPriceNotSubscriptionAllowance(t *testing.T) {
+	db, promoter, invitee := promotionStarBillingTestDB(t)
+	plan := model.SubscriptionPlan{Title: "promotion-plan", PriceAmount: 0.01, Enabled: true, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, TotalAmount: 1_000_000}
+	require.NoError(t, db.Create(&plan).Error)
+	require.NoError(t, model.PurchaseSubscriptionWithBalance(invitee.Id, plan.Id))
+	require.NoError(t, model.ProcessPromotionStarEvents(100))
+	summary, err := model.GetPromotionStarSummary(promoter.Id, model.PromotionStarQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "5000", summary.ConsumptionQuota)
+	assert.Equal(t, "625", summary.NetCommissionQuota)
+	var subscription model.UserSubscription
+	require.NoError(t, db.Where("user_id = ?", invitee.Id).First(&subscription).Error)
+	assert.EqualValues(t, 1_000_000, subscription.AmountTotal)
+	info := &relaycommon.RelayInfo{UserId: invitee.Id, RequestId: "promotion-subscription-use", BillingSource: BillingSourceSubscription, SubscriptionId: subscription.Id, IsPlayground: true}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	require.NoError(t, SettleBilling(ctx, info, 2000))
+	require.NoError(t, model.ProcessPromotionStarEvents(100))
+	summary, err = model.GetPromotionStarSummary(promoter.Id, model.PromotionStarQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "5000", summary.ConsumptionQuota, "subscription allowance must not earn commission twice")
+	wallet, err := model.GetUserQuota(invitee.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, 5000, wallet)
+}
+
+func TestPromotionStarRealtimeSettlementRequiresReconciliation(t *testing.T) {
+	_, promoter, invitee := promotionStarBillingTestDB(t)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("GET", "/v1/realtime", nil)
+	info := &relaycommon.RelayInfo{UserId: invitee.Id, RequestId: "promotion-realtime", RelayFormat: types.RelayFormatOpenAIRealtime, IsPlayground: true, ForcePreConsume: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}}
+	require.Nil(t, PreConsumeBilling(ctx, 500, info))
+	require.NoError(t, PostConsumeQuota(info, 700, 0, false))
+	require.NoError(t, SettleBilling(ctx, info, 700))
+	require.NoError(t, SettleBilling(ctx, info, 700))
+	require.NoError(t, model.ProcessPromotionStarEvents(100))
+	summary, err := model.GetPromotionStarSummary(promoter.Id, model.PromotionStarQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "0", summary.NetCommissionQuota, "separate realtime debits must not be silently treated as reconciled usage")
+	events, count, err := model.ListPromotionStarEvents(model.PromotionStarEventQuery{UserID: promoter.Id})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count)
+	assert.Equal(t, model.PromotionStarEventReview, events[0].State)
+	wallet, err := model.GetUserQuota(invitee.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, 8600, wallet, "promotion integration preserves the host funding operations")
+}
+
+func TestPromotionStarFailureDoesNotCancelExistingWalletRefund(t *testing.T) {
+	db, _, invitee := promotionStarBillingTestDB(t)
+	task := &model.Task{TaskID: "promotion-refund-outage", UserId: invitee.Id, Quota: 500, Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{BillingSource: BillingSourceWallet}}
+	require.NoError(t, db.Create(task).Error)
+	mj := &model.Midjourney{UserId: invitee.Id, MjId: "promotion-mj-outage", Quota: 500}
+	require.NoError(t, db.Create(mj).Error)
+	const callback = "promotion_event_query_outage"
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "promo_service_promotion_star_events" {
+			tx.AddError(errors.New("promotion event store unavailable"))
+		}
+	}))
+	t.Cleanup(func() { require.NoError(t, db.Callback().Query().Remove(callback)) })
+	require.True(t, RefundTaskQuota(context.Background(), task, "Refund despite reporting outage"))
+	require.True(t, RefundMidjourneyQuota(context.Background(), mj, "Refund despite reporting outage"))
+	wallet, err := model.GetUserQuota(invitee.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, 11000, wallet)
+}
+
+func TestPromotionStarIntentFailureKeepsMidjourneyFundingConsistent(t *testing.T) {
+	db, _, invitee := promotionStarBillingTestDB(t)
+	task := &model.Midjourney{UserId: invitee.Id, MjId: "promotion-mj-capture", Quota: 500}
+	require.NoError(t, db.Create(task).Error)
+	const callback = "promotion_event_insert_outage"
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "promo_service_promotion_star_events" {
+			tx.AddError(errors.New("promotion event store unavailable"))
+		}
+	}))
+	t.Cleanup(func() { require.NoError(t, db.Callback().Create().Remove(callback)) })
+	funded, err := SettleMidjourneyTaskBilling(&relaycommon.RelayInfo{UserId: invitee.Id, IsPlayground: true}, task, true)
+	require.NoError(t, err)
+	assert.True(t, funded, "reporting cannot cancel an accepted task's wallet settlement")
+	wallet, err := model.GetUserQuota(invitee.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, 9500, wallet)
+	require.True(t, RefundMidjourneyQuota(context.Background(), task, "Later task failure"))
+	wallet, err = model.GetUserQuota(invitee.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, 10000, wallet, "refund must never credit a charge that did not happen")
+}
+
+func TestPromotionStarAdditionalWalletFeeUsesIndependentConsumption(t *testing.T) {
+	_, promoter, invitee := promotionStarBillingTestDB(t)
+	settings := model_setting.GetGrokSettings()
+	previous := *settings
+	settings.ViolationDeductionEnabled, settings.ViolationDeductionAmount = true, 0.001
+	t.Cleanup(func() { *settings = previous })
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{UserId: invitee.Id, RequestId: "promotion-fee", IsPlayground: true, StartTime: time.Now(), PriceData: hosttypes.PriceData{GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1}}, ChannelMeta: &relaycommon.ChannelMeta{}}
+	require.True(t, ChargeViolationFeeIfNeeded(ctx, info, types.NewError(errors.New("upstream policy fee"), types.ErrorCodeViolationFeeGrokCSAM)))
+	require.NoError(t, model.ProcessPromotionStarEvents(100))
+	summary, err := model.GetPromotionStarSummary(promoter.Id, model.PromotionStarQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "500", summary.ConsumptionQuota)
+	assert.Equal(t, "62.5", summary.NetCommissionQuota)
+}
+
+func TestPromotionStarRefundPreservesIntentAcrossReviewConfirmation(t *testing.T) {
+	for _, approveBeforeRefund := range []bool{false, true} {
+		t.Run(fmt.Sprintf("approve_before_refund=%t", approveBeforeRefund), func(t *testing.T) {
+			db, promoter, invitee := promotionStarBillingTestDB(t)
+			settledAt := time.Now().UnixMilli()
+			original, err := model.RecordPromotionStarEvent(nil, model.PromotionStarEventInput{EventKey: "task:review-refund", UserID: invitee.Id, Kind: model.PromotionStarKindConsumption, Source: model.PromotionStarSourceWalletUsage, Quota: "1000", SettledAtMS: settledAt, State: model.PromotionStarEventReview})
+			require.NoError(t, err)
+			task := &model.Task{TaskID: "review-refund", UserId: invitee.Id, Quota: 1000, Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{BillingSource: BillingSourceWallet}}
+			require.NoError(t, db.Create(task).Error)
+			const callback = "approve_consumption_during_refund"
+			if approveBeforeRefund {
+				require.NoError(t, db.Callback().Create().After("gorm:commit_or_rollback_transaction").Register(callback, func(tx *gorm.DB) {
+					if tx.Statement.Table == "promo_service_promotion_star_events" {
+						if event, ok := tx.Statement.Dest.(*model.PromotionStarEvent); ok && event.Kind == model.PromotionStarKindRefund {
+							_, err := model.FinalizePromotionStarEvent(tx, original.EventKey, model.PromotionStarFinalizeInput{Quota: original.Quota, SettledAtMS: original.SettledAtMS, State: model.PromotionStarEventPending})
+							tx.AddError(err)
+						}
+					}
+				}))
+				t.Cleanup(func() { require.NoError(t, db.Callback().Create().Remove(callback)) })
+			}
+			require.True(t, RefundTaskQuota(context.Background(), task, "Refund reviewed consumption"))
+			if !approveBeforeRefund {
+				_, err = model.FinalizePromotionStarEvent(nil, original.EventKey, model.PromotionStarFinalizeInput{Quota: original.Quota, SettledAtMS: original.SettledAtMS, State: model.PromotionStarEventPending})
+				require.NoError(t, err)
+				refund, err := model.GetPromotionStarEvent(original.EventKey + ":refund")
+				require.NoError(t, err)
+				assert.Equal(t, model.PromotionStarEventReview, refund.State)
+				_, err = model.FinalizePromotionStarEvent(nil, refund.EventKey, model.PromotionStarFinalizeInput{Quota: refund.Quota, SettledAtMS: refund.SettledAtMS, State: model.PromotionStarEventPending})
+				require.NoError(t, err)
+			}
+			require.NoError(t, model.ProcessPromotionStarEvents(100))
+			summary, err := model.GetPromotionStarSummary(promoter.Id, model.PromotionStarQuery{})
+			require.NoError(t, err)
+			assert.Equal(t, "1000", summary.RefundQuota)
+			assert.Equal(t, "0", summary.NetCommissionQuota)
+		})
+	}
+}
+
+func TestPromotionStarMidjourneyBatchCompletionRetainsFinalFacts(t *testing.T) {
+	_, promoter, invitee := promotionStarBillingTestDB(t)
+	key := "midjourney:123"
+	require.NoError(t, beginPromotionWalletConsumption(invitee.Id, key))
+	require.NoError(t, model.RecordPromotionStarReservation(nil, key, "1000", false))
+	RecordPromotionStarMidjourneyCompletion(&model.Midjourney{Id: 123, UserId: invitee.Id, Quota: 1000, Status: "SUCCESS"})
+	event, err := model.GetPromotionStarEvent(key)
+	require.NoError(t, err)
+	assert.Equal(t, model.PromotionStarEventReview, event.State)
+	assert.Equal(t, "1000", event.Quota)
+	assert.Greater(t, event.SettledAtMS, int64(0))
+	assert.Equal(t, promoter.Id, event.PromoterUserID)
+}
 
 // The configured DSNs must point at isolated test databases. Each dialect runs
 // the real reservation, settlement and log paths with the same billing cases.

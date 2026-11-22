@@ -883,8 +883,10 @@ func executeTaskSubmissionWith(
 		common.SysError(common.LogText("settle task billing error: %s", settleErr.Error()))
 		taskErr = service.TaskErrorWrapperLocal(errors.New("failed to settle task billing"), "task_billing_settlement_failed", http.StatusInternalServerError)
 		diagnostics.failed("settle", "billing_error", taskErr, true)
+		service.RecordPromotionStarTaskCompletion(task)
 		return nil, taskErr
 	}
+	service.RecordPromotionStarTaskCompletion(task)
 	perfmetrics.RecordImmediateTaskResult(relayInfo, result.Immediate)
 	if task.Status != model.TaskStatusFailure {
 		service.MarkRequestPolicySuccess(c, nil)

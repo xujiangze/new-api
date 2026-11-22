@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
@@ -101,9 +102,22 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 	}
 
 	// 回退：无 BillingSession 时使用旧路径
+	tracked := model.PromotionStarReady() && !relayInfo.IsChannelTest && relayInfo.BillingSource != BillingSourceSubscription
+	if tracked {
+		if err := beginPromotionWalletConsumption(relayInfo.UserId, promotionRelayEventKey(relayInfo)); err != nil {
+			common.SysError(common.LogText("promotion wallet consumption capture failed: %s", err.Error()))
+		}
+	}
 	quotaDelta := actualQuota - relayInfo.FinalPreConsumedQuota
 	if quotaDelta != 0 {
-		return PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
+		result, err := postConsumeQuotaWithResult(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
+		if tracked {
+			recordPromotionRelaySettlement(relayInfo, actualQuota, result.FundingApplied)
+		}
+		return err
+	}
+	if tracked {
+		recordPromotionRelaySettlement(relayInfo, actualQuota, true)
 	}
 	return nil
 }

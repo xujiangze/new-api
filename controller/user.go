@@ -495,7 +495,18 @@ func buildSelfUserData(user *model.User) map[string]any {
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
+	promotionStarEnabled := false
+	if user.Status == common.UserStatusEnabled && model.PromotionStarReady() {
+		var err error
+		promotionStarEnabled, err = model.IsPromotionStarEnabled(user.Id)
+		if err != nil {
+			promotionStarEnabled = false
+			common.SysError(common.LogText("failed to read promotion star eligibility for user %d", user.Id))
+		}
+	}
 	return map[string]any{
+		"promotion_star_enabled": promotionStarEnabled,
+
 		"id":                user.Id,
 		"username":          user.Username,
 		"display_name":      user.DisplayName,

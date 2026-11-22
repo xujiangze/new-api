@@ -376,6 +376,11 @@ func migrateDB() error {
 		&CasbinRule{},
 		&AuthzRole{},
 		&UserAccessToken{},
+		&PromotionStarProfile{},
+		&PromotionStarRule{},
+		&PromotionStarEvent{},
+		&PromotionStarLedgerEntry{},
+		&PromotionStarDaily{},
 	)
 	if err != nil {
 		return err

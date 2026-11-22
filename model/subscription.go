@@ -833,6 +833,19 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 		if err := tx.Create(order).Error; err != nil {
 			return err
 		}
+		if PromotionStarReady() && requiredQuota > 0 {
+			if _, err := RecordPromotionStarEvent(tx, PromotionStarEventInput{
+				EventKey:    "subscription:" + tradeNo,
+				Kind:        PromotionStarKindConsumption,
+				Source:      PromotionStarSourceSubscriptionBalance,
+				UserID:      userId,
+				Quota:       strconv.Itoa(requiredQuota),
+				SettledAtMS: time.Now().UnixMilli(),
+				State:       PromotionStarEventPending,
+			}); err != nil {
+				return err
+			}
+		}
 
 		logPlanTitle = plan.Title
 		logMoney = plan.PriceAmount

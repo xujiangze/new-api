@@ -53,15 +53,18 @@ func (s *BillingSession) Settle(actualQuota int) error {
 	delta := actualQuota - s.preConsumedQuota
 	if delta == 0 {
 		s.settled = true
+		recordPromotionRelaySettlement(s.relayInfo, actualQuota, true)
 		return nil
 	}
 	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）
 	if !s.fundingSettled {
 		if err := s.funding.Settle(delta); err != nil {
+			recordPromotionRelaySettlement(s.relayInfo, actualQuota, false)
 			return err
 		}
 		s.fundingSettled = true
 	}
+	recordPromotionRelaySettlement(s.relayInfo, actualQuota, true)
 	// 2) 调整令牌额度
 	var tokenErr error
 	if !s.relayInfo.IsPlayground {
@@ -108,11 +111,21 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	extraReserved := s.extraReserved
 	subscriptionId := s.relayInfo.SubscriptionId
 	funding := s.funding
+	promotionKey := ""
+	preConsumedQuota := s.preConsumedQuota
+	if funding.Source() == BillingSourceWallet && !s.relayInfo.IsChannelTest && model.PromotionStarReady() {
+		promotionKey = promotionRelayEventKey(s.relayInfo)
+	}
 
 	gopool.Go(func() {
 		// 1) 退还资金来源
 		if err := funding.Refund(); err != nil {
 			common.SysLog(common.LogText("error refunding billing source: %s", err.Error()))
+			if promotionKey != "" {
+				finishPromotionWalletConsumption(promotionKey, preConsumedQuota, false)
+			}
+		} else if promotionKey != "" {
+			finishPromotionWalletConsumption(promotionKey, 0, true)
 		}
 		if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
 			if err := model.PostConsumeUserSubscriptionDelta(subscriptionId, -int64(extraReserved)); err != nil {
@@ -412,6 +425,11 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		relayInfo.UserQuota = userQuota
+		if model.PromotionStarReady() && !relayInfo.IsChannelTest {
+			if err := beginPromotionWalletConsumption(relayInfo.UserId, promotionRelayEventKey(relayInfo)); err != nil {
+				return nil, types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+			}
+		}
 
 		session := &BillingSession{
 			relayInfo: relayInfo,

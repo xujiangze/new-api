@@ -71,7 +71,16 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 		return false, errors.New("Midjourney task must be persisted before billing")
 	}
 
+	promotionKey := "midjourney:" + strconv.Itoa(task.Id)
+	if err := beginPromotionWalletConsumption(task.UserId, promotionKey); err != nil {
+		common.SysError(common.LogText("promotion Midjourney consumption capture failed: %s", err.Error()))
+	}
 	result, billingErr := postConsumeQuotaWithResult(relayInfo, task.Quota, 0, true)
+	if model.PromotionStarReady() {
+		if err := model.RecordPromotionStarReservation(nil, promotionKey, strconv.Itoa(task.Quota), result.FundingApplied && !common.BatchUpdateEnabled); err != nil {
+			common.SysError(common.LogText("promotion Midjourney reservation recording failed: %s", err.Error()))
+		}
+	}
 	if !result.FundingApplied {
 		task.Quota = 0
 		task.TokenId = 0
@@ -89,6 +98,7 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 	if updateErr := task.UpdateBillingState(); updateErr != nil {
 		return true, errors.Join(billingErr, fmt.Errorf("update Midjourney billing state: %w", updateErr))
 	}
+	RecordPromotionStarMidjourneyCompletion(task)
 	return true, billingErr
 }
 
@@ -99,10 +109,17 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 		return true
 	}
 
+	promotionKey := "midjourney:" + strconv.Itoa(task.Id)
+	refundKey, err := beginPromotionWalletRefund(promotionKey, task.UserId, quota)
+	if err != nil {
+		logger.LogError(ctx, common.LogText("promotion refund capture failed: %s", err.Error()))
+	}
 	if err := model.IncreaseUserQuota(task.UserId, quota, false); err != nil {
 		logger.LogWarn(ctx, common.LogText("failed to refund Midjourney user quota, task %s: %s", task.MjId, err.Error()))
+		finishPromotionWalletRefund(promotionKey, refundKey, quota, false)
 		return false
 	}
+	finishPromotionWalletRefund(promotionKey, refundKey, quota, true)
 
 	if task.TokenId > 0 {
 		tokenKey := resolveTokenKey(ctx, task.TokenId, task.MjId)

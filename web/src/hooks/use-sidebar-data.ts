@@ -32,6 +32,7 @@ import {
   ServerCog,
   Settings,
   ShieldCheck,
+  Star,
   Ticket,
   User,
   Users,
@@ -130,9 +131,32 @@ export function useSidebarData(badges: SidebarBadges = {}): SidebarData {
         ],
       },
       {
+        id: 'promotion-star',
+        title: t('Promotion Star'),
+        items: [
+          { title: t('Overview'), url: '/promotion-star/overview', icon: Star },
+          {
+            title: t('Direct invitees'),
+            url: '/promotion-star/invitees',
+            icon: Users,
+          },
+          {
+            title: t('Commission ledger'),
+            url: '/promotion-star/ledger',
+            icon: ClipboardList,
+          },
+        ],
+      },
+      {
         id: 'admin',
         title: t('Admin'),
         items: [
+          {
+            title: t('Promotion Star management'),
+            url: '/promotion-star-admin',
+            icon: Star,
+            requiredRole: ROLE.ADMIN,
+          },
           {
             title: t('Channels'),
             url: '/channels',

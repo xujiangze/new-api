@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -196,6 +197,7 @@ func main() {
 		common.SysLog(common.LogText("batch update enabled with interval %ss", strconv.Itoa(common.BatchUpdateInterval)))
 		model.InitBatchUpdater()
 	}
+	service.StartPromotionStarWorker()
 
 	host := os.Getenv("HOST")
 	if os.Getenv("ENABLE_PPROF") == "true" {
@@ -339,6 +341,9 @@ func InitResources() error {
 	if err != nil {
 		common.FatalLog(common.LogText("failed to initialize database: %s", err.Error()))
 		return err
+	}
+	if err = model.InitializePromotionStar(model.DB); err != nil {
+		return fmt.Errorf("initialize promotion star accounting: %w", err)
 	}
 	// Before the loads below: a write made while they run is reloaded later.
 	service.ReadStartupSyncRevisions()

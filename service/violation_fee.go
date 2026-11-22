@@ -122,7 +122,18 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		return false
 	}
 
-	if err := PostConsumeQuota(relayInfo, feeQuota, 0, true); err != nil {
+	promotionKey := ""
+	if model.PromotionStarReady() && !relayInfo.IsChannelTest && relayInfo.BillingSource != BillingSourceSubscription {
+		promotionKey = promotionRelayEventKey(relayInfo) + ":fee"
+		if err := beginPromotionWalletConsumption(relayInfo.UserId, promotionKey); err != nil {
+			logger.LogError(ctx, common.LogText("promotion fee capture failed: %s", err.Error()))
+		}
+	}
+	result, err := postConsumeQuotaWithResult(relayInfo, feeQuota, 0, true)
+	if promotionKey != "" {
+		finishPromotionWalletConsumption(promotionKey, feeQuota, result.FundingApplied)
+	}
+	if err != nil {
 		logger.LogError(ctx, common.LogText("failed to charge violation fee: %s", err.Error()))
 		return false
 	}

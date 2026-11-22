@@ -309,6 +309,23 @@ var accessTokenRouteRules = map[string]accessTokenRouteRule{
 	"POST /api/deployments/:id/extend":                  accessTokenScopeRule("deployment:write"),
 	"DELETE /api/deployments/:id":                       accessTokenScopeRule("deployment:write"),
 
+	// router/promotion_star.go: independently granted, browser-session only.
+	"GET /api/promotion-star/overview":                             accessTokenSessionRule,
+	"GET /api/promotion-star/invitees":                             accessTokenSessionRule,
+	"GET /api/promotion-star/ledger":                               accessTokenSessionRule,
+	"GET /api/promotion-star/admin/profiles":                       accessTokenSessionRule,
+	"GET /api/promotion-star/admin/profiles/:user_id":              accessTokenSessionRule,
+	"GET /api/promotion-star/admin/profiles/:user_id/overview":     accessTokenSessionRule,
+	"GET /api/promotion-star/admin/profiles/:user_id/invitees":     accessTokenSessionRule,
+	"GET /api/promotion-star/admin/profiles/:user_id/ledger":       accessTokenSessionRule,
+	"GET /api/promotion-star/admin/profiles/:user_id/rules":        accessTokenSessionRule,
+	"POST /api/promotion-star/admin/profiles/:user_id/grant":       accessTokenSessionRule,
+	"PATCH /api/promotion-star/admin/profiles/:user_id/rate":       accessTokenSessionRule,
+	"POST /api/promotion-star/admin/profiles/:user_id/suspend":     accessTokenSessionRule,
+	"POST /api/promotion-star/admin/profiles/:user_id/adjustments": accessTokenSessionRule,
+	"GET /api/promotion-star/admin/review-events":                  accessTokenSessionRule,
+	"POST /api/promotion-star/admin/review-events/:id/resolve":     accessTokenSessionRule,
+
 	// router/relay-router.go
 	"POST /pg/chat/completions": accessTokenSessionRule,
 }

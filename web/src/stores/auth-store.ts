@@ -28,6 +28,8 @@ export type UserPermissions = {
 }
 
 export interface AuthUser {
+  /** Independent personal capability; older self responses default to denied. */
+  promotion_star_enabled?: boolean
   has_password?: boolean
   id: number
   username: string

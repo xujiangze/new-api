@@ -44,6 +44,10 @@ import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenti
 import { Route as AuthenticatedModelsSectionRouteImport } from './routes/_authenticated/models/$section'
 import { Route as AuthenticatedPlaygroundIndexRouteImport } from './routes/_authenticated/playground/index'
 import { Route as AuthenticatedProfileIndexRouteImport } from './routes/_authenticated/profile/index'
+import { Route as AuthenticatedPromotionStarAdminIndexRouteImport } from './routes/_authenticated/promotion-star-admin/index'
+import { Route as AuthenticatedPromotionStarInviteesRouteImport } from './routes/_authenticated/promotion-star/invitees'
+import { Route as AuthenticatedPromotionStarLedgerRouteImport } from './routes/_authenticated/promotion-star/ledger'
+import { Route as AuthenticatedPromotionStarOverviewRouteImport } from './routes/_authenticated/promotion-star/overview'
 import { Route as AuthenticatedRedemptionCodesIndexRouteImport } from './routes/_authenticated/redemption-codes/index'
 import { Route as AuthenticatedRequestProcessingIndexRouteImport } from './routes/_authenticated/request-processing/index'
 import { Route as AuthenticatedSecurityIndexRouteImport } from './routes/_authenticated/security/index'
@@ -257,6 +261,30 @@ const AuthenticatedProfileIndexRoute =
     path: '/profile/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedPromotionStarAdminIndexRoute =
+  AuthenticatedPromotionStarAdminIndexRouteImport.update({
+    id: '/promotion-star-admin/',
+    path: '/promotion-star-admin/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedPromotionStarInviteesRoute =
+  AuthenticatedPromotionStarInviteesRouteImport.update({
+    id: '/promotion-star/invitees',
+    path: '/promotion-star/invitees',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedPromotionStarLedgerRoute =
+  AuthenticatedPromotionStarLedgerRouteImport.update({
+    id: '/promotion-star/ledger',
+    path: '/promotion-star/ledger',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedPromotionStarOverviewRoute =
+  AuthenticatedPromotionStarOverviewRouteImport.update({
+    id: '/promotion-star/overview',
+    path: '/promotion-star/overview',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedRedemptionCodesIndexRoute =
   AuthenticatedRedemptionCodesIndexRouteImport.update({
     id: '/redemption-codes/',
@@ -464,6 +492,9 @@ export interface FileRoutesByFullPath {
   '/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
+  '/promotion-star/invitees': typeof AuthenticatedPromotionStarInviteesRoute
+  '/promotion-star/ledger': typeof AuthenticatedPromotionStarLedgerRoute
+  '/promotion-star/overview': typeof AuthenticatedPromotionStarOverviewRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
@@ -472,6 +503,7 @@ export interface FileRoutesByFullPath {
   '/models/': typeof AuthenticatedModelsIndexRoute
   '/playground/': typeof AuthenticatedPlaygroundIndexRoute
   '/profile/': typeof AuthenticatedProfileIndexRoute
+  '/promotion-star-admin/': typeof AuthenticatedPromotionStarAdminIndexRoute
   '/redemption-codes/': typeof AuthenticatedRedemptionCodesIndexRoute
   '/request-processing/': typeof AuthenticatedRequestProcessingIndexRoute
   '/security/': typeof AuthenticatedSecurityIndexRoute
@@ -528,6 +560,9 @@ export interface FileRoutesByTo {
   '/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
+  '/promotion-star/invitees': typeof AuthenticatedPromotionStarInviteesRoute
+  '/promotion-star/ledger': typeof AuthenticatedPromotionStarLedgerRoute
+  '/promotion-star/overview': typeof AuthenticatedPromotionStarOverviewRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
@@ -536,6 +571,7 @@ export interface FileRoutesByTo {
   '/models': typeof AuthenticatedModelsIndexRoute
   '/playground': typeof AuthenticatedPlaygroundIndexRoute
   '/profile': typeof AuthenticatedProfileIndexRoute
+  '/promotion-star-admin': typeof AuthenticatedPromotionStarAdminIndexRoute
   '/redemption-codes': typeof AuthenticatedRedemptionCodesIndexRoute
   '/request-processing': typeof AuthenticatedRequestProcessingIndexRoute
   '/security': typeof AuthenticatedSecurityIndexRoute
@@ -596,6 +632,9 @@ export interface FileRoutesById {
   '/_authenticated/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/_authenticated/models/$section': typeof AuthenticatedModelsSectionRoute
+  '/_authenticated/promotion-star/invitees': typeof AuthenticatedPromotionStarInviteesRoute
+  '/_authenticated/promotion-star/ledger': typeof AuthenticatedPromotionStarLedgerRoute
+  '/_authenticated/promotion-star/overview': typeof AuthenticatedPromotionStarOverviewRoute
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/_authenticated/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
@@ -604,6 +643,7 @@ export interface FileRoutesById {
   '/_authenticated/models/': typeof AuthenticatedModelsIndexRoute
   '/_authenticated/playground/': typeof AuthenticatedPlaygroundIndexRoute
   '/_authenticated/profile/': typeof AuthenticatedProfileIndexRoute
+  '/_authenticated/promotion-star-admin/': typeof AuthenticatedPromotionStarAdminIndexRoute
   '/_authenticated/redemption-codes/': typeof AuthenticatedRedemptionCodesIndexRoute
   '/_authenticated/request-processing/': typeof AuthenticatedRequestProcessingIndexRoute
   '/_authenticated/security/': typeof AuthenticatedSecurityIndexRoute
@@ -663,6 +703,9 @@ export interface FileRouteTypes {
     | '/dashboard/$section'
     | '/errors/$error'
     | '/models/$section'
+    | '/promotion-star/invitees'
+    | '/promotion-star/ledger'
+    | '/promotion-star/overview'
     | '/usage-logs/$section'
     | '/usage-logs/audit'
     | '/channels/'
@@ -671,6 +714,7 @@ export interface FileRouteTypes {
     | '/models/'
     | '/playground/'
     | '/profile/'
+    | '/promotion-star-admin/'
     | '/redemption-codes/'
     | '/request-processing/'
     | '/security/'
@@ -727,6 +771,9 @@ export interface FileRouteTypes {
     | '/dashboard/$section'
     | '/errors/$error'
     | '/models/$section'
+    | '/promotion-star/invitees'
+    | '/promotion-star/ledger'
+    | '/promotion-star/overview'
     | '/usage-logs/$section'
     | '/usage-logs/audit'
     | '/channels'
@@ -735,6 +782,7 @@ export interface FileRouteTypes {
     | '/models'
     | '/playground'
     | '/profile'
+    | '/promotion-star-admin'
     | '/redemption-codes'
     | '/request-processing'
     | '/security'
@@ -794,6 +842,9 @@ export interface FileRouteTypes {
     | '/_authenticated/dashboard/$section'
     | '/_authenticated/errors/$error'
     | '/_authenticated/models/$section'
+    | '/_authenticated/promotion-star/invitees'
+    | '/_authenticated/promotion-star/ledger'
+    | '/_authenticated/promotion-star/overview'
     | '/_authenticated/usage-logs/$section'
     | '/_authenticated/usage-logs/audit'
     | '/_authenticated/channels/'
@@ -802,6 +853,7 @@ export interface FileRouteTypes {
     | '/_authenticated/models/'
     | '/_authenticated/playground/'
     | '/_authenticated/profile/'
+    | '/_authenticated/promotion-star-admin/'
     | '/_authenticated/redemption-codes/'
     | '/_authenticated/request-processing/'
     | '/_authenticated/security/'
@@ -1096,6 +1148,34 @@ declare module '@tanstack/react-router' {
       path: '/profile'
       fullPath: '/profile/'
       preLoaderRoute: typeof AuthenticatedProfileIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/promotion-star-admin/': {
+      id: '/_authenticated/promotion-star-admin/'
+      path: '/promotion-star-admin'
+      fullPath: '/promotion-star-admin/'
+      preLoaderRoute: typeof AuthenticatedPromotionStarAdminIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/promotion-star/invitees': {
+      id: '/_authenticated/promotion-star/invitees'
+      path: '/promotion-star/invitees'
+      fullPath: '/promotion-star/invitees'
+      preLoaderRoute: typeof AuthenticatedPromotionStarInviteesRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/promotion-star/ledger': {
+      id: '/_authenticated/promotion-star/ledger'
+      path: '/promotion-star/ledger'
+      fullPath: '/promotion-star/ledger'
+      preLoaderRoute: typeof AuthenticatedPromotionStarLedgerRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/promotion-star/overview': {
+      id: '/_authenticated/promotion-star/overview'
+      path: '/promotion-star/overview'
+      fullPath: '/promotion-star/overview'
+      preLoaderRoute: typeof AuthenticatedPromotionStarOverviewRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/redemption-codes/': {
@@ -1407,6 +1487,9 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedDashboardSectionRoute: typeof AuthenticatedDashboardSectionRoute
   AuthenticatedErrorsErrorRoute: typeof AuthenticatedErrorsErrorRoute
   AuthenticatedModelsSectionRoute: typeof AuthenticatedModelsSectionRoute
+  AuthenticatedPromotionStarInviteesRoute: typeof AuthenticatedPromotionStarInviteesRoute
+  AuthenticatedPromotionStarLedgerRoute: typeof AuthenticatedPromotionStarLedgerRoute
+  AuthenticatedPromotionStarOverviewRoute: typeof AuthenticatedPromotionStarOverviewRoute
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
   AuthenticatedUsageLogsAuditRoute: typeof AuthenticatedUsageLogsAuditRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
@@ -1415,6 +1498,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedModelsIndexRoute: typeof AuthenticatedModelsIndexRoute
   AuthenticatedPlaygroundIndexRoute: typeof AuthenticatedPlaygroundIndexRoute
   AuthenticatedProfileIndexRoute: typeof AuthenticatedProfileIndexRoute
+  AuthenticatedPromotionStarAdminIndexRoute: typeof AuthenticatedPromotionStarAdminIndexRoute
   AuthenticatedRedemptionCodesIndexRoute: typeof AuthenticatedRedemptionCodesIndexRoute
   AuthenticatedRequestProcessingIndexRoute: typeof AuthenticatedRequestProcessingIndexRoute
   AuthenticatedSecurityIndexRoute: typeof AuthenticatedSecurityIndexRoute
@@ -1435,6 +1519,11 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDashboardSectionRoute: AuthenticatedDashboardSectionRoute,
   AuthenticatedErrorsErrorRoute: AuthenticatedErrorsErrorRoute,
   AuthenticatedModelsSectionRoute: AuthenticatedModelsSectionRoute,
+  AuthenticatedPromotionStarInviteesRoute:
+    AuthenticatedPromotionStarInviteesRoute,
+  AuthenticatedPromotionStarLedgerRoute: AuthenticatedPromotionStarLedgerRoute,
+  AuthenticatedPromotionStarOverviewRoute:
+    AuthenticatedPromotionStarOverviewRoute,
   AuthenticatedUsageLogsSectionRoute: AuthenticatedUsageLogsSectionRoute,
   AuthenticatedUsageLogsAuditRoute: AuthenticatedUsageLogsAuditRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
@@ -1443,6 +1532,8 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedModelsIndexRoute: AuthenticatedModelsIndexRoute,
   AuthenticatedPlaygroundIndexRoute: AuthenticatedPlaygroundIndexRoute,
   AuthenticatedProfileIndexRoute: AuthenticatedProfileIndexRoute,
+  AuthenticatedPromotionStarAdminIndexRoute:
+    AuthenticatedPromotionStarAdminIndexRoute,
   AuthenticatedRedemptionCodesIndexRoute:
     AuthenticatedRedemptionCodesIndexRoute,
   AuthenticatedRequestProcessingIndexRoute:

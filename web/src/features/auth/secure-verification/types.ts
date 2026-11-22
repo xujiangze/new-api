@@ -46,6 +46,11 @@ export type SecurityProofScope =
   | 'admin.user.passkey.reset'
   | 'admin.user.2fa.disable'
   | 'admin.user.binding.clear'
+  | 'admin.promotion_star.grant'
+  | 'admin.promotion_star.rate'
+  | 'admin.promotion_star.suspend'
+  | 'admin.promotion_star.adjust'
+  | 'admin.promotion_star.review'
 
 /** ManageUser actions that change a user's status or role and need step-up. */
 export type AdminUserManageAction = 'disable' | 'enable' | 'promote' | 'demote'
@@ -89,6 +94,35 @@ export type VerificationOperation =
       context: { token_id: number } | { legacy: true }
     }
   | {
+      scope: 'admin.promotion_star.grant' | 'admin.promotion_star.rate'
+      context: { user_id: number; rate_bps: number; reason: string }
+    }
+  | {
+      scope: 'admin.promotion_star.suspend'
+      context: { user_id: number; reason: string }
+    }
+  | {
+      scope: 'admin.promotion_star.review'
+      context: {
+        event_key: string
+        state: 'pending' | 'ignored'
+        reason: string
+        expected_updated_at_ms: number
+        expected_quota: string
+        expected_settled_at_ms: number
+      }
+    }
+  | {
+      scope: 'admin.promotion_star.adjust'
+      context: {
+        user_id: number
+        commission_quota: string
+        reason: string
+        evidence: string
+        idempotency_key: string
+      }
+    }
+  | {
       scope: Exclude<
         SecurityProofScope,
         | 'channel.key.read'
@@ -98,6 +132,7 @@ export type VerificationOperation =
         | 'access_token.update'
         | 'access_token.revoke'
         | `admin.user.${string}`
+        | `admin.promotion_star.${string}`
       >
       context?: Record<string, never>
     }

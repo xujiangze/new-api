@@ -270,11 +270,23 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 		return true
 	}
 
+	promotionKey := "task:" + task.TaskID
+	refundKey := ""
+	if task.PrivateData.BillingSource != BillingSourceSubscription {
+		var err error
+		refundKey, err = beginPromotionWalletRefund(promotionKey, task.UserId, quota)
+		if err != nil {
+			logger.LogError(ctx, common.LogText("promotion refund capture failed: %s", err.Error()))
+		}
+	}
+
 	// 1. 退还资金来源（钱包或订阅）
 	if err := taskAdjustFunding(task, -quota); err != nil {
 		logger.LogWarn(ctx, common.LogText("failed to refund the funding source, task %s: %s", task.TaskID, err.Error()))
+		finishPromotionWalletRefund(promotionKey, refundKey, quota, false)
 		return false
 	}
+	finishPromotionWalletRefund(promotionKey, refundKey, quota, true)
 
 	// 2. 退还令牌额度
 	taskAdjustTokenQuota(ctx, task, -quota)
@@ -321,6 +333,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	if quotaDelta == 0 {
 		logger.LogInfo(ctx, common.LogText("task %s pre-consumed quota matches the actual quota (%s, %s)",
 			task.TaskID, logger.LogQuota(actualQuota), reason.Error()))
+		RecordPromotionStarTaskCompletion(task)
 		return
 	}
 
@@ -335,6 +348,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	// 调整资金来源
 	if err := taskAdjustFunding(task, quotaDelta); err != nil {
 		logger.LogError(ctx, common.LogText("failed to adjust funding for the difference, task %s: %s", task.TaskID, err.Error()))
+		finishPromotionWalletConsumption("task:"+task.TaskID, actualQuota, false)
 		return
 	}
 
@@ -344,6 +358,9 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	task.Quota = actualQuota
 	if err := task.UpdateQuota(); err != nil {
 		logger.LogError(ctx, common.LogText("failed to write back the settled task quota, task %s: %s", task.TaskID, err.Error()))
+		finishPromotionWalletConsumption("task:"+task.TaskID, actualQuota, false)
+	} else {
+		RecordPromotionStarTaskCompletion(task)
 	}
 
 	// 提交阶段已经累计过一次请求；结算阶段只调整最终用量。

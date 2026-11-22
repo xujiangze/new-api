@@ -239,6 +239,11 @@ var accessTokenVerificationScopes = map[string]string{
 	VerificationScopeAccessTokenUpdate:     "",
 	VerificationScopeAccessTokenRevoke:     "",
 	VerificationScopeLogin:                 "",
+	VerificationScopePromotionStarGrant:    "",
+	VerificationScopePromotionStarRate:     "",
+	VerificationScopePromotionStarSuspend:  "",
+	VerificationScopePromotionStarAdjust:   "",
+	VerificationScopePromotionStarReview:   "",
 }
 
 // AccessTokenVerificationScope returns the token scope a PAT needs for a

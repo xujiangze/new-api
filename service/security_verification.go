@@ -259,6 +259,13 @@ func BindVerificationOperation(operation VerificationOperation) (VerificationBin
 			return VerificationBinding{}, ErrVerificationContextInvalid
 		}
 		normalized = context
+	case VerificationScopePromotionStarGrant, VerificationScopePromotionStarRate,
+		VerificationScopePromotionStarSuspend, VerificationScopePromotionStarAdjust, VerificationScopePromotionStarReview:
+		var err error
+		normalized, err = promotionStarVerificationContext(operation.Scope, fields)
+		if err != nil {
+			return VerificationBinding{}, err
+		}
 	case VerificationScopePasskeyRegister, VerificationScopePasskeyDelete, VerificationScopeTwoFASetup,
 		VerificationScopeTwoFADisable, VerificationScopeTwoFABackupCodes,
 		VerificationScopePasswordSet, VerificationScopePasswordChange, VerificationScopeAccountDelete:
@@ -330,7 +337,9 @@ func securityVerificationPolicy(scope string, state model.UserVerificationState)
 		VerificationScopePasswordSet, VerificationScopePasswordChange, VerificationScopeAccountDelete,
 		VerificationScopeAdminUserCreate, VerificationScopeAdminUserUpdate, VerificationScopeAdminUserDelete,
 		VerificationScopeAdminUserManage, VerificationScopeAdminUserPasskeyReset,
-		VerificationScopeAdminUserTwoFADisable, VerificationScopeAdminUserBindingClear:
+		VerificationScopeAdminUserTwoFADisable, VerificationScopeAdminUserBindingClear,
+		VerificationScopePromotionStarGrant, VerificationScopePromotionStarRate, VerificationScopePromotionStarSuspend,
+		VerificationScopePromotionStarAdjust, VerificationScopePromotionStarReview:
 		if scope == VerificationScopeAccountDelete && state.Role == common.RoleRootUser {
 			return nil, ErrVerificationForbidden
 		}
@@ -378,7 +387,7 @@ func GetVerificationRequirements(identity AuthIdentity, scope string) (*Verifica
 	if scope == VerificationScopeChannelKeyRead && state.Role != common.RoleRootUser {
 		return nil, ErrVerificationForbidden
 	}
-	if strings.HasPrefix(scope, verificationScopeAdminUserPrefix) && state.Role < common.RoleAdminUser {
+	if (strings.HasPrefix(scope, verificationScopeAdminUserPrefix) || isPromotionStarVerificationScope(scope)) && state.Role < common.RoleAdminUser {
 		return nil, ErrVerificationForbidden
 	}
 	if err := requireAccessTokenVerificationScope(identity, scope); err != nil {
@@ -395,7 +404,9 @@ func GetVerificationRequirements(identity AuthIdentity, scope string) (*Verifica
 			case VerificationScopeAccountBind, VerificationScopeAccountUnbind, VerificationScopePasswordSet, VerificationScopePasswordChange, VerificationScopeAccountDelete,
 				VerificationScopeAdminUserCreate, VerificationScopeAdminUserUpdate, VerificationScopeAdminUserDelete,
 				VerificationScopeAdminUserManage, VerificationScopeAdminUserPasskeyReset,
-				VerificationScopeAdminUserTwoFADisable, VerificationScopeAdminUserBindingClear:
+				VerificationScopeAdminUserTwoFADisable, VerificationScopeAdminUserBindingClear,
+				VerificationScopePromotionStarGrant, VerificationScopePromotionStarRate, VerificationScopePromotionStarSuspend,
+				VerificationScopePromotionStarAdjust, VerificationScopePromotionStarReview:
 				methods[i].Available, methods[i].Reason = false, "Password authentication is disabled."
 			}
 		}

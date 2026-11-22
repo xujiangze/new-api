@@ -398,13 +398,15 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			cacheCreationTokens, _ = other.public["cache_write_tokens"].(int)
 		}
 		inputTokens := normalizedConsumeInputTokens(params.PromptTokens, cacheReadTokens, cacheCreationTokens, other)
+		// Rankings and dashboards sum token_used, so it counts the whole prompt
+		// in every usage dialect, Claude cache reads and writes included.
 		LogQuotaData(QuotaDataLogParams{
 			UserID:              userId,
 			Username:            username,
 			ModelName:           params.ModelName,
 			Quota:               params.Quota,
 			CreatedAt:           createdAt,
-			TokenUsed:           params.PromptTokens + params.CompletionTokens,
+			TokenUsed:           int(inputTokens) + params.CompletionTokens,
 			InputTokens:         inputTokens,
 			CacheReadTokens:     int64(cacheReadTokens),
 			CacheCreationTokens: int64(cacheCreationTokens),

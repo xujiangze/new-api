@@ -1263,6 +1263,76 @@ func TestPostTextConsumeQuotaBillsOpenAI12hCacheWrites(t *testing.T) {
 	}
 }
 
+// Rankings and dashboards sum quota_data.token_used. Claude reports
+// input_tokens without cache reads and writes, so a cached Claude turn must
+// still count its whole prompt, as OpenAI-semantic usage already does.
+func TestPostTextConsumeQuotaRankingTokensIncludeClaudeCache(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 64, 64
+	seedUser(t, userID, 1_000_000_000)
+	seedChannel(t, channelID)
+	require.NoError(t, model.DB.AutoMigrate(&model.QuotaData{}))
+	originalDataExport := common.DataExportEnabled
+	common.DataExportEnabled = true
+	model.SaveQuotaDataCache()
+	require.NoError(t, model.DB.Exec("DELETE FROM quota_data").Error)
+	t.Cleanup(func() {
+		common.DataExportEnabled = originalDataExport
+		model.DB.Exec("DELETE FROM quota_data")
+	})
+	gin.SetMode(gin.TestMode)
+	// A Claude Code style turn: 3 new input, 40000 cache reads, 1500 cache
+	// writes and 200 output tokens; 41703 tokens in total.
+	claudeUsage := func() *dto.Usage {
+		return &dto.Usage{
+			PromptTokens: 3, CompletionTokens: 200, TotalTokens: 203, UsageSemantic: dto.BillingUsageSemanticAnthropic,
+			PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 40000, CachedCreationTokens: 1500},
+			BillingUsage: dto.NewClaudeMessagesBillingUsage(&dto.ClaudeUsage{
+				InputTokens: 3, CacheReadInputTokens: 40000, CacheCreationInputTokens: 1500, OutputTokens: 200,
+			}),
+		}
+	}
+	cases := []struct {
+		model  string
+		format types.RelayFormat
+		usage  *dto.Usage
+	}{
+		{"ranking-claude-messages", types.RelayFormatClaude, claudeUsage()},
+		{"ranking-claude-chat", types.RelayFormatOpenAI, claudeUsage()},
+		{"ranking-openai", types.RelayFormatOpenAI, &dto.Usage{
+			PromptTokens: 41503, CompletionTokens: 200, TotalTokens: 41703,
+			PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 40000},
+		}},
+	}
+	for _, tc := range cases {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+		PostTextConsumeQuota(ctx, &relaycommon.RelayInfo{
+			UserId:          userID,
+			OriginModelName: tc.model,
+			UsingGroup:      "default",
+			StartTime:       time.Now(),
+			RelayFormat:     tc.format,
+			ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
+			PriceData: hosttypes.PriceData{ModelRatio: 1.5, CompletionRatio: 5, CacheRatio: 0.1, CacheCreationRatio: 1.25,
+				GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1}},
+		}, tc.usage, nil)
+	}
+	model.SaveQuotaDataCache()
+
+	config, err := rankingConfig("today")
+	require.NoError(t, err)
+	snapshot, err := buildRankingsSnapshot(config, time.Now())
+	require.NoError(t, err)
+	totals := make(map[string]int64)
+	for _, row := range snapshot.Models {
+		totals[row.ModelName] = row.TotalTokens
+	}
+	for _, tc := range cases {
+		assert.Equal(t, int64(41703), totals[tc.model], tc.model)
+	}
+}
+
 func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheReadFromPromptBilling(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

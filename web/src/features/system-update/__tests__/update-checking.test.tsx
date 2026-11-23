@@ -36,6 +36,7 @@ import type { ReactNode } from 'react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
+import { AnnouncementPopupGate } from '@/features/announcement-popup/announcement-popup-gate'
 import { UpdateCheckerSection } from '@/features/system-settings/maintenance/update-checker-section'
 import { api } from '@/lib/api'
 import { createAppQueryClient } from '@/lib/query-client'
@@ -45,7 +46,11 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { useSystemUpdatePreferencesStore, useSystemUpdateStore } from '../store'
 import { SystemUpdateAction } from '../system-update-action'
-import { SYSTEM_UPDATE_INTERVAL, useSystemUpdate } from '../use-system-update'
+import {
+  SYSTEM_UPDATE_INTERVAL,
+  systemUpdateQueryOptions,
+  useSystemUpdate,
+} from '../use-system-update'
 
 const release = {
   tag_name: 'v1.0.0-rc.36',
@@ -606,6 +611,48 @@ describe('version notification preferences', () => {
 })
 
 describe('update cache and scheduling', () => {
+  test('keeps an update-started status failure silent when the announcement gate joins the pending request', async () => {
+    const redirect = vi.fn()
+    const notify = vi.spyOn(toast, 'error')
+    client.clear()
+    client = createAppQueryClient(redirect)
+    client.setDefaultOptions({ queries: { retry: false } })
+    client.setQueryData(
+      STATUS_QUERY_KEY,
+      { version: 'v1.0.0-rc.35' },
+      { updatedAt: Date.now() - 10 * 60 * 1000 }
+    )
+    let rejectStatus: (error: unknown) => void = () => {
+      throw new Error('Status request not initialized')
+    }
+    const pendingStatus = new Promise<never>((_resolve, reject) => {
+      rejectStatus = reject
+    })
+    vi.mocked(api.get).mockReturnValue(pendingStatus)
+
+    const snapshot = await client.fetchQuery(systemUpdateQueryOptions)
+    expect(api.get).toHaveBeenCalledExactlyOnceWith('/api/status')
+    render(<AnnouncementPopupGate />, { wrapper: Wrapper })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(api.get).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      rejectStatus({ response: { status: 500 } })
+      await pendingStatus.catch(() => undefined)
+    })
+    await waitFor(() =>
+      expect(client.getQueryState(STATUS_QUERY_KEY)?.status).toBe('error')
+    )
+    expect(redirect).not.toHaveBeenCalled()
+    expect(notify).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(api.get).toHaveBeenCalledTimes(1)
+    expect(snapshot.release?.tag_name).toBe(release.tag_name)
+    expect(snapshot.error).toBeNull()
+    expect(useSystemUpdateStore.getState().snapshot).toEqual(snapshot)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   test('refreshes the server version during a later automatic check and clears an installed update', async () => {
     vi.useFakeTimers()
     fetchMock.mockImplementation(

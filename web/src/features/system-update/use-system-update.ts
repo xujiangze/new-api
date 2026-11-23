@@ -69,9 +69,7 @@ export const systemUpdateQueryOptions = queryOptions({
   queryKey: SYSTEM_UPDATE_QUERY_KEY,
   queryFn: async ({ signal, client }): Promise<SystemUpdateSnapshot> => {
     // Refresh the running server version too, so an open tab notices upgrades.
-    void client
-      .fetchQuery({ ...statusQueryOptions, meta: { errorToast: false } })
-      .catch(() => undefined)
+    void client.fetchQuery(statusQueryOptions).catch(() => undefined)
     let snapshot: SystemUpdateSnapshot
     try {
       const release = await fetchLatestSystemRelease(signal)

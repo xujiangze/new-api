@@ -277,6 +277,7 @@ export interface AnnouncementItem {
   publishDate?: string
   type?: 'default' | 'ongoing' | 'success' | 'warning' | 'error'
   extra?: string
+  popupOnLogin?: boolean
 }
 
 // ============================================================================

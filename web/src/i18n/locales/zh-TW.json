@@ -1,5 +1,17 @@
 {
   "translation": {
+    "Popup on login": "登入後彈出",
+    "All announcements": "全部公告",
+    "Login popups": "登入彈窗",
+    "List only": "僅列表顯示",
+    "Announcement display filter": "公告顯示篩選",
+    "Select announcement": "選取公告",
+    "Announcement content": "公告內容",
+    "I understand": "我知道了",
+    "Please review the latest announcements. Confirming only marks these versions as read in this browser.": "請閱讀最新公告。確認後僅在目前瀏覽器將本次顯示的版本標為已讀。",
+    "Show unconfirmed announcements when users enter the console. Turning this off keeps the announcement in the list.": "使用者進入控制台時顯示尚未確認的公告。關閉後公告仍保留在列表中。",
+    "Used to sort announcements, not to schedule publication": "僅用於公告排序，不代表定時發布",
+    "Announcement #{{index}} popup on login must be a boolean": "第 {{index}} 則公告的登入彈窗設定必須為布林值",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

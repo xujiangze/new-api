@@ -1,5 +1,17 @@
 {
   "translation": {
+    "Popup on login": "ログイン後に表示",
+    "All announcements": "すべてのお知らせ",
+    "Login popups": "ログイン時のポップアップ",
+    "List only": "一覧のみ",
+    "Announcement display filter": "お知らせの表示フィルター",
+    "Select announcement": "お知らせを選択",
+    "Announcement content": "お知らせの内容",
+    "I understand": "確認しました",
+    "Please review the latest announcements. Confirming only marks these versions as read in this browser.": "最新のお知らせをご確認ください。確認すると、このブラウザーで今回表示されたバージョンのみ既読になります。",
+    "Show unconfirmed announcements when users enter the console. Turning this off keeps the announcement in the list.": "コンソールに入ったときに未確認のお知らせを表示します。オフにしても一覧には残ります。",
+    "Used to sort announcements, not to schedule publication": "お知らせの並べ替えに使用します。公開予約ではありません",
+    "Announcement #{{index}} popup on login must be a boolean": "お知らせ #{{index}} のログイン時表示設定は真偽値である必要があります",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

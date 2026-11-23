@@ -211,6 +211,37 @@ it('lets a local handler own notifications when automatic error toasts are disab
   client.clear()
 })
 
+it('keeps server-error redirects for ordinary queries while optional background reads can opt out', async () => {
+  const redirect = vi.fn()
+  const client = createAppQueryClient(redirect)
+  const notify = vi.spyOn(toast, 'error').mockReturnValue('error')
+  const failure = { response: { status: 500 } }
+  await expect(
+    client.fetchQuery({
+      queryKey: ['optional background read'],
+      queryFn: async () => {
+        throw failure
+      },
+      retry: false,
+      meta: { errorToast: false, errorRedirect: false },
+    })
+  ).rejects.toBe(failure)
+  expect(redirect).not.toHaveBeenCalled()
+  expect(notify).not.toHaveBeenCalled()
+  await expect(
+    client.fetchQuery({
+      queryKey: ['ordinary read'],
+      queryFn: async () => {
+        throw failure
+      },
+      retry: false,
+      meta: { errorToast: false },
+    })
+  ).rejects.toBe(failure)
+  expect(redirect).toHaveBeenCalledTimes(1)
+  client.clear()
+})
+
 it('keeps cancellations silent even after wrapping them in another error', () => {
   const notify = vi.spyOn(toast, 'error').mockReturnValue('error')
   for (const error of [
@@ -304,23 +335,23 @@ it.each([200, 401])(
       access_expires_at: 2_000_000_000,
     }
     const open = vi.spyOn(XMLHttpRequest.prototype, 'open')
-    vi.spyOn(XMLHttpRequest.prototype, 'send').mockImplementation(
-      function (this: XMLHttpRequest) {
-        Object.defineProperties(this, {
-          status: { value: refreshStatus, configurable: true },
-          statusText: { value: 'Refresh response', configurable: true },
-          responseText: {
-            value: JSON.stringify({
-              success: refreshStatus === 200,
-              data: fresh,
-            }),
-            configurable: true,
-          },
-          readyState: { value: 4, configurable: true },
-        })
-        this.onloadend?.(new ProgressEvent('loadend'))
-      }
-    )
+    vi.spyOn(XMLHttpRequest.prototype, 'send').mockImplementation(function (
+      this: XMLHttpRequest
+    ) {
+      Object.defineProperties(this, {
+        status: { value: refreshStatus, configurable: true },
+        statusText: { value: 'Refresh response', configurable: true },
+        responseText: {
+          value: JSON.stringify({
+            success: refreshStatus === 200,
+            data: fresh,
+          }),
+          configurable: true,
+        },
+        readyState: { value: 4, configurable: true },
+      })
+      this.onloadend?.(new ProgressEvent('loadend'))
+    })
     let requests = 0
     api.defaults.adapter = async (config) => {
       requests++

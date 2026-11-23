@@ -17,28 +17,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Plus, Trash2, Save } from 'lucide-react'
+import { Eye, Plus, Trash2, Save } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
 
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StaticDataTable } from '@/components/data-table/static/static-data-table'
 import { StaticRowActions } from '@/components/data-table/static/static-row-actions'
 import { DateTimePicker } from '@/components/datetime-picker'
 import { Dialog } from '@/components/dialog'
 import { StatusBadge } from '@/components/status-badge'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -60,6 +51,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { AnnouncementDetailModal } from '@/features/dashboard/components/overview/announcement-detail-dialog'
 import { toIntlLocale } from '@/i18n/languages'
 import dayjs from '@/lib/dayjs'
 import { formatTimestampRelative } from '@/lib/format'
@@ -75,7 +67,10 @@ type Announcement = {
   publishDate: string
   type: 'default' | 'ongoing' | 'success' | 'warning' | 'error'
   extra?: string
+  popupOnLogin?: boolean
 }
+
+type AnnouncementFilter = 'all' | 'popup' | 'list'
 
 type AnnouncementsSectionProps = {
   enabled: boolean
@@ -89,6 +84,7 @@ const announcementSchema = z.object({
     .max(500, 'Content must be less than 500 characters'),
   publishDate: z.string().min(1, 'Publish date is required'),
   type: z.enum(['default', 'ongoing', 'success', 'warning', 'error']),
+  popupOnLogin: z.boolean(),
   extra: z
     .string()
     .max(100, 'Extra must be less than 100 characters')
@@ -144,10 +140,14 @@ export function AnnouncementsSection({
   const [hasChanges, setHasChanges] = useState(false)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [showDialog, setShowDialog] = useState(false)
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [deleteTargets, setDeleteTargets] = useState<Announcement[] | null>(
+    null
+  )
+  const [filter, setFilter] = useState<AnnouncementFilter>('all')
+  const [previewAnnouncement, setPreviewAnnouncement] =
+    useState<Announcement | null>(null)
   const [editingAnnouncement, setEditingAnnouncement] =
     useState<Announcement | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<'single' | 'batch'>('single')
 
   const form = useForm<AnnouncementFormValues>({
     resolver: zodResolver(announcementSchema),
@@ -156,6 +156,7 @@ export function AnnouncementsSection({
       publishDate: new Date().toISOString(),
       type: 'default',
       extra: '',
+      popupOnLogin: true,
     },
   })
 
@@ -163,13 +164,20 @@ export function AnnouncementsSection({
     try {
       const parsed = JSON.parse(data || '[]')
       if (Array.isArray(parsed)) {
+        const maxId = Math.max(
+          0,
+          ...parsed.map((item) => (typeof item.id === 'number' ? item.id : 0))
+        )
         setAnnouncements(
           parsed.map((item, idx) => ({
             ...item,
-            id: item.id || idx + 1,
+            id: item.id || maxId + idx + 1,
           }))
         )
+      } else {
+        setAnnouncements([])
       }
+      setSelectedIds([])
     } catch {
       setAnnouncements([])
     }
@@ -193,12 +201,17 @@ export function AnnouncementsSection({
   }
 
   const handleAdd = () => {
+    if (announcements.length >= 100) {
+      toast.error(t('Announcements cannot exceed 100 entries'))
+      return
+    }
     setEditingAnnouncement(null)
     form.reset({
       content: '',
       publishDate: new Date().toISOString(),
       type: 'default',
       extra: '',
+      popupOnLogin: true,
     })
     setShowDialog(true)
   }
@@ -210,53 +223,42 @@ export function AnnouncementsSection({
       publishDate: announcement.publishDate,
       type: announcement.type,
       extra: announcement.extra || '',
+      popupOnLogin: announcement.popupOnLogin === true,
     })
     setShowDialog(true)
   }
 
   const handleDelete = (announcement: Announcement) => {
-    setEditingAnnouncement(announcement)
-    setDeleteTarget('single')
-    setShowDeleteDialog(true)
+    setDeleteTargets([announcement])
   }
 
   const handleBatchDelete = () => {
-    if (selectedIds.length === 0) {
-      toast.error(t('Please select items to delete'))
-      return
-    }
-    setDeleteTarget('batch')
-    setShowDeleteDialog(true)
+    if (visibleSelectedIds.length === 0) return
+    setDeleteTargets(
+      visibleAnnouncements.filter((item) => selectedIds.includes(item.id))
+    )
   }
 
   const confirmDelete = () => {
-    if (deleteTarget === 'single' && editingAnnouncement) {
-      setAnnouncements((prev) =>
-        prev.filter((item) => item.id !== editingAnnouncement.id)
-      )
-      setHasChanges(true)
-      toast.success(t('Announcement deleted. Click "Save Settings" to apply.'))
-    } else if (deleteTarget === 'batch') {
-      setAnnouncements((prev) =>
-        prev.filter((item) => !selectedIds.includes(item.id))
-      )
-      setSelectedIds([])
-      setHasChanges(true)
-      toast.success(
-        t('{{count}} announcements deleted. Click "Save Settings" to apply.', {
-          count: selectedIds.length,
-        })
-      )
-    }
-    setShowDeleteDialog(false)
-    setEditingAnnouncement(null)
+    if (!deleteTargets?.length) return
+    setAnnouncements((prev) =>
+      prev.filter((item) => !deleteTargets.includes(item))
+    )
+    setSelectedIds([])
+    setHasChanges(true)
+    toast.success(
+      t('{{count}} announcements deleted. Click "Save Settings" to apply.', {
+        count: deleteTargets.length,
+      })
+    )
+    setDeleteTargets(null)
   }
 
   const handleSubmitForm = (values: AnnouncementFormValues) => {
     if (editingAnnouncement) {
       setAnnouncements((prev) =>
         prev.map((item) =>
-          item.id === editingAnnouncement.id ? { ...item, ...values } : item
+          item === editingAnnouncement ? { ...item, ...values } : item
         )
       )
       toast.success(t('Announcement updated. Click "Save Settings" to apply.'))
@@ -283,7 +285,7 @@ export function AnnouncementsSection({
   }
 
   const toggleSelectAll = (checked: boolean) => {
-    setSelectedIds(checked ? announcements.map((item) => item.id) : [])
+    setSelectedIds(checked ? visibleAnnouncements.map((item) => item.id) : [])
   }
 
   const toggleSelectOne = (id: number, checked: boolean) => {
@@ -292,20 +294,38 @@ export function AnnouncementsSection({
     )
   }
 
-  const sortedAnnouncements = useMemo(() => {
-    return [...announcements].sort((a, b) => {
-      return (
-        new Date(b.publishDate).getTime() - new Date(a.publishDate).getTime()
-      )
-    })
-  }, [announcements])
+  const visibleAnnouncements = useMemo(() => {
+    return announcements
+      .filter((announcement) => {
+        if (filter === 'popup') return announcement.popupOnLogin === true
+        if (filter === 'list') return announcement.popupOnLogin !== true
+        return true
+      })
+      .sort((a, b) => {
+        return (
+          new Date(b.publishDate).getTime() - new Date(a.publishDate).getTime()
+        )
+      })
+  }, [announcements, filter])
+  const visibleSelectedIds = visibleAnnouncements
+    .filter((item) => selectedIds.includes(item.id))
+    .map((item) => item.id)
+  const filterOptions = [
+    { value: 'all', label: t('All announcements') },
+    { value: 'popup', label: t('Login popups') },
+    { value: 'list', label: t('List only') },
+  ]
 
   return (
     <SettingsSection title={t('Announcements')}>
       <div className='space-y-4'>
         <div className='flex flex-wrap items-center justify-between gap-2'>
           <div className='flex flex-wrap items-center gap-2'>
-            <Button onClick={handleAdd} size='sm'>
+            <Button
+              onClick={handleAdd}
+              size='sm'
+              disabled={announcements.length >= 100}
+            >
               <Plus className='mr-2 h-4 w-4' />
               {t('Add Announcement')}
             </Button>
@@ -313,11 +333,11 @@ export function AnnouncementsSection({
               onClick={handleBatchDelete}
               size='sm'
               variant='destructive'
-              disabled={selectedIds.length === 0}
+              disabled={visibleSelectedIds.length === 0}
             >
               <Trash2 className='mr-2 h-4 w-4' />
               {t('Delete (')}
-              {selectedIds.length})
+              {visibleSelectedIds.length})
             </Button>
             <Button
               onClick={handleSaveAll}
@@ -330,6 +350,7 @@ export function AnnouncementsSection({
             </Button>
           </div>
           <SettingsSwitchField
+            controlId='announcements-enabled'
             checked={isEnabled}
             onCheckedChange={handleToggleEnabled}
             label={t('Enabled')}
@@ -337,27 +358,64 @@ export function AnnouncementsSection({
           />
         </div>
 
+        <Select
+          items={filterOptions}
+          value={filter}
+          onValueChange={(value) => {
+            if (!value) return
+            setFilter(value as AnnouncementFilter)
+            setSelectedIds([])
+          }}
+        >
+          <SelectTrigger
+            aria-label={t('Announcement display filter')}
+            className='w-full sm:w-56'
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            <SelectGroup>
+              {filterOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+
         <StaticDataTable
-          data={sortedAnnouncements}
-          getRowKey={(announcement) => announcement.id}
-          emptyContent={t(
-            'No announcements yet. Click "Add Announcement" to create one.'
-          )}
+          data={visibleAnnouncements}
+          getRowKey={(announcement) => announcements.indexOf(announcement)}
+          emptyContent={
+            announcements.length === 0
+              ? t(
+                  'No announcements yet. Click "Add Announcement" to create one.'
+                )
+              : t('No results found')
+          }
           columns={[
             {
               id: 'select',
               header: (
                 <Checkbox
+                  aria-label={t('Select all')}
                   checked={
-                    selectedIds.length === announcements.length &&
-                    announcements.length > 0
+                    visibleSelectedIds.length === visibleAnnouncements.length &&
+                    visibleAnnouncements.length > 0
                   }
+                  indeterminate={
+                    visibleSelectedIds.length > 0 &&
+                    visibleSelectedIds.length < visibleAnnouncements.length
+                  }
+                  disabled={visibleAnnouncements.length === 0}
                   onCheckedChange={toggleSelectAll}
                 />
               ),
               className: 'w-12',
               cell: (announcement) => (
                 <Checkbox
+                  aria-label={t('Select announcement')}
                   checked={selectedIds.includes(announcement.id)}
                   onCheckedChange={(checked) =>
                     toggleSelectOne(announcement.id, checked as boolean)
@@ -396,10 +454,10 @@ export function AnnouncementsSection({
               header: t('Type'),
               cell: (announcement) => (
                 <StatusBadge
-                  label={
+                  label={t(
                     typeOptions.find((opt) => opt.value === announcement.type)
-                      ?.label
-                  }
+                      ?.label ?? 'Default'
+                  )}
                   variant={
                     typeOptions.find((opt) => opt.value === announcement.type)
                       ?.badgeVariant ?? 'neutral'
@@ -407,6 +465,16 @@ export function AnnouncementsSection({
                   copyable={false}
                 />
               ),
+            },
+            {
+              id: 'popup-on-login',
+              header: t('Popup on login'),
+              cell: (announcement) =>
+                t(
+                  announcement.popupOnLogin === true
+                    ? 'Login popups'
+                    : 'List only'
+                ),
             },
             {
               id: 'extra',
@@ -418,13 +486,23 @@ export function AnnouncementsSection({
               id: 'actions',
               header: t('Actions'),
               cell: (announcement) => (
-                <StaticRowActions
-                  editLabel={t('Edit')}
-                  deleteLabel={t('Delete')}
-                  menuLabel={t('Open menu')}
-                  onEdit={() => handleEdit(announcement)}
-                  onDelete={() => handleDelete(announcement)}
-                />
+                <div className='flex items-center justify-end gap-1'>
+                  <Button
+                    variant='ghost'
+                    size='icon-sm'
+                    aria-label={t('Preview')}
+                    onClick={() => setPreviewAnnouncement(announcement)}
+                  >
+                    <Eye />
+                  </Button>
+                  <StaticRowActions
+                    editLabel={t('Edit')}
+                    deleteLabel={t('Delete')}
+                    menuLabel={t('Open menu')}
+                    onEdit={() => handleEdit(announcement)}
+                    onDelete={() => handleDelete(announcement)}
+                  />
+                </div>
               ),
             },
           ]}
@@ -503,7 +581,7 @@ export function AnnouncementsSection({
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'Date and time when this announcement should be displayed'
+                      'Used to sort announcements, not to schedule publication'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -524,7 +602,7 @@ export function AnnouncementsSection({
                           <div
                             className={`h-3 w-3 rounded-full ${option.color}`}
                           />
-                          {option.label}
+                          {t(option.label)}
                         </div>
                       ),
                     }))}
@@ -546,13 +624,36 @@ export function AnnouncementsSection({
                               <div
                                 className={`h-3 w-3 rounded-full ${option.color}`}
                               />
-                              {option.label}
+                              {t(option.label)}
                             </div>
                           </SelectItem>
                         ))}
                       </SelectGroup>
                     </SelectContent>
                   </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='popupOnLogin'
+              render={({ field }) => (
+                <FormItem className='flex items-center gap-3'>
+                  <FormControl>
+                    <Checkbox
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <div className='space-y-1'>
+                    <FormLabel>{t('Popup on login')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Show unconfirmed announcements when users enter the console. Turning this off keeps the announcement in the list.'
+                      )}
+                    </FormDescription>
+                  </div>
                   <FormMessage />
                 </FormItem>
               )}
@@ -582,26 +683,31 @@ export function AnnouncementsSection({
         </Form>
       </Dialog>
 
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('Are you sure?')}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {deleteTarget === 'single'
-                ? t('This announcement will be removed from the list.')
-                : t('{{count}} announcements will be removed from the list.', {
-                    count: selectedIds.length,
-                  })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
-            <AlertDialogAction variant='destructive' onClick={confirmDelete}>
-              {t('Delete')}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <AnnouncementDetailModal
+        open={previewAnnouncement !== null}
+        onOpenChange={(open) => {
+          if (!open) setPreviewAnnouncement(null)
+        }}
+        announcement={previewAnnouncement}
+      />
+
+      <ConfirmDialog
+        open={deleteTargets !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTargets(null)
+        }}
+        title={t('Are you sure?')}
+        desc={
+          deleteTargets?.length === 1
+            ? t('This announcement will be removed from the list.')
+            : t('{{count}} announcements will be removed from the list.', {
+                count: deleteTargets?.length ?? 0,
+              })
+        }
+        confirmText={t('Delete')}
+        destructive
+        handleConfirm={confirmDelete}
+      />
     </SettingsSection>
   )
 }

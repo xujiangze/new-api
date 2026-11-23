@@ -22,6 +22,7 @@ import { SkipToMain } from '@/components/skip-to-main'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { LayoutProvider } from '@/context/layout-provider'
 import { SearchProvider } from '@/context/search-provider'
+import { AnnouncementPopupGate } from '@/features/announcement-popup/announcement-popup-gate'
 import { getCookie } from '@/lib/cookies'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
@@ -60,6 +61,7 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
           </div>
         </SidebarProvider>
         <CommandMenu />
+        <AnnouncementPopupGate />
       </SearchProvider>
     </LayoutProvider>
   )

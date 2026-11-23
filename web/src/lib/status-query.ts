@@ -152,6 +152,9 @@ async function fetchStatus(): Promise<StatusData | null> {
 export const statusQueryOptions = queryOptions({
   queryKey: STATUS_QUERY_KEY,
   queryFn: fetchStatus,
+  // Branding and optional console content retain their fallback on read failures.
+  // Keep this shared: an observer must not restore toasts or redirects mid-fetch.
+  meta: { errorToast: false, errorRedirect: false },
   // Data becomes stale after 5 minutes
   staleTime: 5 * 60 * 1000,
   // Cache expires after 30 minutes

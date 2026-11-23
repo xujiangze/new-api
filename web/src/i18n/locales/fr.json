@@ -1,5 +1,17 @@
 {
   "translation": {
+    "Popup on login": "Afficher à la connexion",
+    "All announcements": "Toutes les annonces",
+    "Login popups": "Annonces à la connexion",
+    "List only": "Liste uniquement",
+    "Announcement display filter": "Filtrer l’affichage des annonces",
+    "Select announcement": "Sélectionner l’annonce",
+    "Announcement content": "Contenu des annonces",
+    "I understand": "J’ai compris",
+    "Please review the latest announcements. Confirming only marks these versions as read in this browser.": "Veuillez lire les dernières annonces. La confirmation marque uniquement les versions affichées comme lues dans ce navigateur.",
+    "Show unconfirmed announcements when users enter the console. Turning this off keeps the announcement in the list.": "Afficher les annonces non confirmées à l’entrée dans la console. Désactiver cette option conserve l’annonce dans la liste.",
+    "Used to sort announcements, not to schedule publication": "Sert à trier les annonces, pas à programmer leur publication",
+    "Announcement #{{index}} popup on login must be a boolean": "L’option d’affichage à la connexion de l’annonce n° {{index}} doit être un booléen",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

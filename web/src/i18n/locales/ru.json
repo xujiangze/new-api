@@ -1,5 +1,17 @@
 {
   "translation": {
+    "Popup on login": "Показывать при входе",
+    "All announcements": "Все объявления",
+    "Login popups": "Объявления при входе",
+    "List only": "Только в списке",
+    "Announcement display filter": "Фильтр показа объявлений",
+    "Select announcement": "Выбрать объявление",
+    "Announcement content": "Содержимое объявлений",
+    "I understand": "Понятно",
+    "Please review the latest announcements. Confirming only marks these versions as read in this browser.": "Ознакомьтесь с последними объявлениями. Подтверждение отмечает прочитанными только показанные версии в этом браузере.",
+    "Show unconfirmed announcements when users enter the console. Turning this off keeps the announcement in the list.": "Показывать неподтверждённые объявления при входе в консоль. После отключения объявление останется в списке.",
+    "Used to sort announcements, not to schedule publication": "Используется для сортировки объявлений, а не для отложенной публикации",
+    "Announcement #{{index}} popup on login must be a boolean": "Параметр показа при входе для объявления № {{index}} должен быть логическим значением",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

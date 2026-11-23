@@ -1,5 +1,17 @@
 {
   "translation": {
+    "Popup on login": "Popup on login",
+    "All announcements": "All announcements",
+    "Login popups": "Login popups",
+    "List only": "List only",
+    "Announcement display filter": "Announcement display filter",
+    "Select announcement": "Select announcement",
+    "Announcement content": "Announcement content",
+    "I understand": "I understand",
+    "Please review the latest announcements. Confirming only marks these versions as read in this browser.": "Please review the latest announcements. Confirming only marks these versions as read in this browser.",
+    "Show unconfirmed announcements when users enter the console. Turning this off keeps the announcement in the list.": "Show unconfirmed announcements when users enter the console. Turning this off keeps the announcement in the list.",
+    "Used to sort announcements, not to schedule publication": "Used to sort announcements, not to schedule publication",
+    "Announcement #{{index}} popup on login must be a boolean": "Announcement #{{index}} popup on login must be a boolean",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

@@ -1,5 +1,17 @@
 {
   "translation": {
+    "Popup on login": "登录后弹出",
+    "All announcements": "全部公告",
+    "Login popups": "登录弹窗",
+    "List only": "仅列表展示",
+    "Announcement display filter": "公告展示筛选",
+    "Select announcement": "选择公告",
+    "Announcement content": "公告内容",
+    "I understand": "我知道了",
+    "Please review the latest announcements. Confirming only marks these versions as read in this browser.": "请阅读最新公告。确认后仅在当前浏览器将本次展示的版本标为已读。",
+    "Show unconfirmed announcements when users enter the console. Turning this off keeps the announcement in the list.": "用户进入控制台时展示尚未确认的公告。关闭后公告仍保留在列表中。",
+    "Used to sort announcements, not to schedule publication": "仅用于公告排序，不代表定时发布",
+    "Announcement #{{index}} popup on login must be a boolean": "第 {{index}} 条公告的登录弹窗设置必须为布尔值",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

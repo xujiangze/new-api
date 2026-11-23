@@ -1,5 +1,17 @@
 {
   "translation": {
+    "Popup on login": "Hiển thị khi đăng nhập",
+    "All announcements": "Tất cả thông báo",
+    "Login popups": "Thông báo khi đăng nhập",
+    "List only": "Chỉ trong danh sách",
+    "Announcement display filter": "Bộ lọc hiển thị thông báo",
+    "Select announcement": "Chọn thông báo",
+    "Announcement content": "Nội dung thông báo",
+    "I understand": "Tôi đã hiểu",
+    "Please review the latest announcements. Confirming only marks these versions as read in this browser.": "Vui lòng đọc các thông báo mới nhất. Xác nhận chỉ đánh dấu các phiên bản đang hiển thị là đã đọc trong trình duyệt này.",
+    "Show unconfirmed announcements when users enter the console. Turning this off keeps the announcement in the list.": "Hiển thị các thông báo chưa được xác nhận khi người dùng vào bảng điều khiển. Tắt tùy chọn này vẫn giữ thông báo trong danh sách.",
+    "Used to sort announcements, not to schedule publication": "Dùng để sắp xếp thông báo, không phải để lên lịch đăng",
+    "Announcement #{{index}} popup on login must be a boolean": "Tùy chọn hiển thị khi đăng nhập của thông báo #{{index}} phải là giá trị boolean",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
